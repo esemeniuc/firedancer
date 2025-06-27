@@ -874,3 +874,22 @@
 | <span class="metrics-name">snapin_&#8203;accounts_&#8203;inserted</span> | gauge | Number of accounts inserted during snpashot loading. Might decrease if snapshot load is aborted and restarted |
 
 </div>
+
+## Snp Tile
+
+<div class="metrics">
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| <span class="metrics-name">snp_&#8203;cluster_&#8203;contact_&#8203;info_&#8203;cnt</span> | histogram | Number of contact infos in the cluster contact info message |
+| <span class="metrics-name">snp_&#8203;cluster_&#8203;contact_&#8203;snp_&#8203;cnt</span> | histogram | Number of contact SNP in the cluster contact info message |
+| <span class="metrics-name">snp_&#8203;tx_&#8203;bytes_&#8203;via_&#8203;udp_&#8203;cnt</span> | counter | The total count of bytes sent via raw UDP |
+| <span class="metrics-name">snp_&#8203;tx_&#8203;bytes_&#8203;via_&#8203;snp_&#8203;cnt</span> | counter | The total count of bytes sent via SNP |
+| <span class="metrics-name">snp_&#8203;tx_&#8203;pkts_&#8203;via_&#8203;udp_&#8203;cnt</span> | counter | The total count of packets sent via raw UDP |
+| <span class="metrics-name">snp_&#8203;tx_&#8203;pkts_&#8203;via_&#8203;snp_&#8203;cnt</span> | counter | The total count of packets sent via SNP |
+| <span class="metrics-name">snp_&#8203;rx_&#8203;bytes_&#8203;via_&#8203;udp_&#8203;cnt</span> | counter | The total count of bytes received via raw UDP |
+| <span class="metrics-name">snp_&#8203;rx_&#8203;bytes_&#8203;via_&#8203;snp_&#8203;cnt</span> | counter | The total count of bytes received via SNP |
+| <span class="metrics-name">snp_&#8203;rx_&#8203;pkts_&#8203;via_&#8203;udp_&#8203;cnt</span> | counter | The total count of packets received via raw UDP |
+| <span class="metrics-name">snp_&#8203;rx_&#8203;pkts_&#8203;via_&#8203;snp_&#8203;cnt</span> | counter | The total count of packets received via SNP |
+
+</div>
