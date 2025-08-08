@@ -1,3 +1,56 @@
+/**********************************************************************/
+/* Firedancer Vote Program Implementation                             */
+/* 
+ * This file implements the Solana Vote Program, which is a native program
+ * that enables validators to participate in Solana's consensus mechanism.
+ * It is a direct transliteration of the Agave vote program from Rust to C.
+ *
+ * OVERVIEW:
+ * The vote program manages vote accounts that track:
+ * - Validator identity and authorization
+ * - Vote history and lockouts (Tower BFT consensus)
+ * - Epoch credits for reward calculation
+ * - Commission rates for delegation rewards
+ *
+ * KEY CONCEPTS:
+ * 1. Vote Accounts: Store validator voting state and authorization info
+ * 2. Tower BFT: Consensus algorithm using exponential lockouts
+ * 3. Lockouts: Prevent voting on conflicting forks for increasing periods
+ * 4. Epoch Credits: Track validator performance for staking rewards
+ * 5. Vote Authority: Can submit votes (typically the validator identity)
+ * 6. Withdraw Authority: Can withdraw lamports from vote account
+ *
+ * INSTRUCTION TYPES (16 total):
+ * - InitializeAccount: Create new vote account
+ * - Authorize/AuthorizeChecked: Change vote/withdraw authority
+ * - AuthorizeWithSeed/AuthorizeCheckedWithSeed: Authorize using derived keys
+ * - Vote/VoteSwitch: Submit votes (legacy, being deprecated)
+ * - UpdateVoteState/UpdateVoteStateSwitch: Submit vote state updates
+ * - CompactUpdateVoteState/CompactUpdateVoteStateSwitch: Compact vote updates
+ * - TowerSync/TowerSyncSwitch: Sync local tower with on-chain state
+ * - UpdateValidatorIdentity: Change validator node identity
+ * - UpdateCommission: Change commission rate
+ * - Withdraw: Withdraw lamports from vote account
+ *
+ * SECURITY CONSIDERATIONS:
+ * - All operations require proper authority signatures
+ * - Vote timing is validated against slot hashes
+ * - Lockout conflicts are prevented
+ * - Commission updates have timing restrictions
+ *
+ * PERFORMANCE:
+ * - Uses 2100 compute units (same as Agave)
+ * - Optimized for frequent vote submissions
+ * - Supports both legacy and modern vote formats
+ *
+ * COMPATIBILITY:
+ * - Maintains exact behavioral compatibility with Agave
+ * - Supports all historical vote state versions
+ * - Respects feature flags for deprecated instructions
+ *
+ * Address: Vote111111111111111111111111111111111111111
+ */
+
 #include "fd_vote_program.h"
 #include "../fd_borrowed_account.h"
 #include "../fd_executor.h"
@@ -10,48 +63,57 @@
 #include <stdio.h>
 #include <string.h>
 
+/**********************************************************************/
+/* Constants - Vote Program Configuration                            */
+/**********************************************************************/
+
+/* Tower BFT Consensus Parameters */
 // https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/mod.rs#L35
-#define MAX_LOCKOUT_HISTORY 31UL
+#define MAX_LOCKOUT_HISTORY 31UL          /* Maximum number of vote lockouts stored */
 
+// https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/mod.rs#L36  
+#define INITIAL_LOCKOUT 2UL               /* Starting lockout period for new votes */
+
+/* Epoch Credits Tracking */
 // https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/mod.rs#L36
-#define INITIAL_LOCKOUT 2UL
-
-// https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/mod.rs#L36
-#define MAX_EPOCH_CREDITS_HISTORY 64UL
-
-// https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/mod.rs#L42
-#define DEFAULT_PRIOR_VOTERS_OFFSET 114
+#define MAX_EPOCH_CREDITS_HISTORY 64UL    /* Maximum epochs of credit history to retain */
 
 // https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/mod.rs#L45
-#define VOTE_CREDITS_GRACE_SLOTS 2
+#define VOTE_CREDITS_GRACE_SLOTS 2        /* Grace period slots for credit calculation */
 
 // https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/mod.rs#L48
-#define VOTE_CREDITS_MAXIMUM_PER_SLOT 16
+#define VOTE_CREDITS_MAXIMUM_PER_SLOT 16  /* Max credits earnable per slot (current) */
 
 // https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/mod.rs#L51
-#define VOTE_CREDITS_MAXIMUM_PER_SLOT_OLD 8
+#define VOTE_CREDITS_MAXIMUM_PER_SLOT_OLD 8  /* Max credits per slot (historical) */
 
-// https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/clock.rs#L147
-#define SLOT_DEFAULT 0UL
-
-// https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/clock.rs#L147
-#define SLOT_MAX ULONG_MAX
+/* Vote State Serialization Offsets */
+// https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/mod.rs#L42
+#define DEFAULT_PRIOR_VOTERS_OFFSET 114   /* Offset for prior voters in vote state */
 
 // https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/mod.rs#L886
-#define VERSION_OFFSET (4UL)
+#define VERSION_OFFSET (4UL)              /* Byte offset of version field */
 
 // https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/mod.rs#L887
-#define DEFAULT_PRIOR_VOTERS_END (118)
+#define DEFAULT_PRIOR_VOTERS_END (118)    /* End offset for prior voters section */
 
+/* Legacy Vote State Format (v1.14.11) */
 // https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/vote_state_1_14_11.rs#L6
-#define DEFAULT_PRIOR_VOTERS_OFFSET_1_14_11 (82UL)
+#define DEFAULT_PRIOR_VOTERS_OFFSET_1_14_11 (82UL)  /* Prior voters offset (legacy) */
 
 // https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/vote_state_1_14_11.rs#L60
-#define DEFAULT_PRIOR_VOTERS_END_1_14_11 (86UL)
+#define DEFAULT_PRIOR_VOTERS_END_1_14_11 (86UL)     /* Prior voters end (legacy) */
 
-#define ACCOUNTS_MAX 4 /* Vote instructions take in at most 4 accounts */
+/* Slot Boundaries */
+// https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/clock.rs#L147
+#define SLOT_DEFAULT 0UL                  /* Default/genesis slot number */
 
-#define DEFAULT_COMPUTE_UNITS 2100UL
+// https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/clock.rs#L147
+#define SLOT_MAX ULONG_MAX               /* Maximum possible slot number */
+
+/* Runtime Configuration */
+#define ACCOUNTS_MAX 4                    /* Vote instructions take in at most 4 accounts */
+#define DEFAULT_COMPUTE_UNITS 2100UL      /* Compute units consumed by vote instructions */
 
 /**********************************************************************/
 /* size_of                                                            */
@@ -64,9 +126,27 @@ size_of_versioned( int is_current ) {
 }
 
 /**********************************************************************/
-/* impl Lockout                                                       */
+/* Tower BFT Lockout Implementation                                  */
 /**********************************************************************/
 
+/**
+ * lockout - Calculate the lockout period for a vote
+ *
+ * DESCRIPTION:
+ * Computes the exponential lockout period based on confirmation count.
+ * The lockout period doubles with each confirmation, implementing
+ * Tower BFT's exponential backoff for consensus safety.
+ *
+ * FORMULA: lockout = 2^confirmation_count
+ *
+ * SAFETY:
+ * - Prevents voting on conflicting forks for exponentially increasing periods
+ * - Ensures economic finality through escalating commitment
+ * - Protects against long-range attacks and forks
+ *
+ * @param self  Vote lockout entry to calculate lockout for
+ * @return      Number of slots this vote locks out conflicting votes
+ */
 // https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/mod.rs#L104
 static inline ulong
 lockout( fd_vote_lockout_t * self ) {
@@ -76,18 +156,60 @@ lockout( fd_vote_lockout_t * self ) {
   return 1UL<<confirmation_count;
 }
 
+/**
+ * last_locked_out_slot - Calculate the final slot locked out by this vote
+ *
+ * DESCRIPTION:
+ * Determines the last slot number that this vote prevents conflicting
+ * votes on. Any vote on a slot <= this value would conflict.
+ *
+ * FORMULA: last_locked_out_slot = vote_slot + lockout_period
+ *
+ * @param self  Vote lockout entry
+ * @return      Last slot number locked out by this vote
+ */
 // https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/mod.rs#L110
 static inline ulong
 last_locked_out_slot( fd_vote_lockout_t * self ) {
   return fd_ulong_sat_add( self->slot, lockout( self ) );
 }
 
+/**
+ * is_locked_out_at_slot - Check if this vote locks out voting on a given slot
+ *
+ * DESCRIPTION:
+ * Determines whether this existing vote would prevent voting on the
+ * specified slot due to Tower BFT lockout rules.
+ *
+ * LOCKOUT RULE:
+ * A vote is locked out at slot S if: last_locked_out_slot >= S
+ *
+ * @param self  Vote lockout entry to check
+ * @param slot  Slot number to check for lockout
+ * @return      1 if locked out, 0 if voting is allowed
+ */
 // https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/mod.rs#L114
 static inline ulong
 is_locked_out_at_slot( fd_vote_lockout_t * self, ulong slot ) {
   return last_locked_out_slot( self ) >= slot;
 }
 
+/**
+ * increase_confirmation_count - Increment confirmation count for a vote
+ *
+ * DESCRIPTION:
+ * Increases the confirmation count when the voted-on slot gets more
+ * confirmations. Higher confirmation counts lead to longer lockout periods,
+ * implementing Tower BFT's escalating commitment mechanism.
+ *
+ * TOWER BFT MECHANICS:
+ * - Each additional confirmation doubles the lockout period
+ * - Creates exponentially increasing economic finality
+ * - Prevents rational validators from switching to conflicting forks
+ *
+ * @param self  Vote lockout entry to update
+ * @param by    Number of confirmations to add (with saturation)
+ */
 // https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/mod.rs#L122
 static void
 increase_confirmation_count( fd_vote_lockout_t * self, uint by ) {
@@ -665,6 +787,30 @@ process_next_vote_slot( fd_vote_state_t * self,
   double_lockouts( self );
 }
 
+/**********************************************************************/
+/* Vote Authorization and Processing Core Functions                  */
+/**********************************************************************/
+
+/**
+ * get_and_update_authorized_voter - Get the authorized voter for current epoch
+ * 
+ * DESCRIPTION:
+ * Retrieves the authorized voter pubkey for the current epoch and cleans up
+ * any expired authorized voters from previous epochs. This is critical for
+ * ensuring only the correct authority can submit votes.
+ *
+ * AUTHORIZATION MECHANICS:
+ * - Authorized voters can be set for future epochs
+ * - Only one authorized voter per epoch is allowed
+ * - Past epoch authorized voters are purged for efficiency
+ * - Supports smooth authority transitions between epochs
+ *
+ * @param self           Vote state containing authorized voters
+ * @param current_epoch  Current epoch number
+ * @param pubkey         [out] Authorized voter pubkey for current epoch
+ * @param ctx           Execution context for memory allocation
+ * @return              Success code or error if no authorized voter found
+ */
 // https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/state/mod.rs#L828
 static int
 get_and_update_authorized_voter( fd_vote_state_t *           self,
@@ -2256,23 +2402,50 @@ process_authorize_with_seed_instruction(
 /* Entry point for the Vote Program                                   */
 /**********************************************************************/
 
+/**
+ * fd_vote_program_execute - Main entry point for vote program instruction processing
+ * 
+ * This function is the central dispatcher for all vote program instructions.
+ * It performs initial validation, decodes the instruction data, and routes
+ * to the appropriate instruction handler.
+ * 
+ * PROCESSING FLOW:
+ * 1. Charge compute units (2100 CUs, same as Agave)
+ * 2. Validate minimum account count (at least vote account)
+ * 3. Borrow and validate the vote account (must be owned by vote program)
+ * 4. Extract transaction signers for authorization checks
+ * 5. Decode the instruction data using bincode
+ * 6. Dispatch to appropriate instruction handler based on discriminant
+ * 
+ * SECURITY:
+ * - Validates vote account ownership to prevent cross-program attacks
+ * - Ensures instruction data is well-formed before processing
+ * - Marks vote account as dirty for cache updates after processing
+ * 
+ * @param ctx  Instruction execution context containing accounts, data, etc.
+ * @return     FD_EXECUTOR_INSTR_SUCCESS on success, error code on failure
+ */
 // https://github.com/anza-xyz/agave/blob/v2.0.1/programs/vote/src/vote_processor.rs#L57
 int
 fd_vote_program_execute( fd_exec_instr_ctx_t * ctx ) {
-  /* FD-specific init */
+  /* Initialize result code */
   int rc = FD_EXECUTOR_INSTR_SUCCESS;
 
+  /* Charge compute units for vote instruction processing */
   // https://github.com/anza-xyz/agave/blob/v2.0.1/programs/vote/src/vote_processor.rs#L57
   FD_EXEC_CU_UPDATE( ctx, DEFAULT_COMPUTE_UNITS );
 
+  /* Validate minimum account count - vote account is required */
   // https://github.com/anza-xyz/agave/blob/v2.0.1/programs/vote/src/vote_processor.rs#L64
   if( FD_UNLIKELY( ctx->instr->acct_cnt < 1 ) ) {
     return FD_EXECUTOR_INSTR_ERR_NOT_ENOUGH_ACC_KEYS;
   }
 
+  /* Borrow the vote account (index 0) for reading/writing */
   fd_guarded_borrowed_account_t me;
   FD_TRY_BORROW_INSTR_ACCOUNT_DEFAULT_ERR_CHECK( ctx, 0, &me );
 
+  /* Handle account borrowing errors */
   switch( rc ) {
   case FD_ACC_MGR_SUCCESS:
     break;
@@ -2284,6 +2457,7 @@ fd_vote_program_execute( fd_exec_instr_ctx_t * ctx ) {
     return FD_EXECUTOR_INSTR_ERR_ACC_BORROW_FAILED;
   }
 
+  /* Security check: Ensure vote account is owned by the vote program */
   // https://github.com/anza-xyz/agave/blob/v2.0.1/programs/vote/src/vote_processor.rs#L65
   if( FD_UNLIKELY( 0 != memcmp( fd_borrowed_account_get_owner( &me ),
                                 fd_solana_vote_program_id.key,
@@ -2292,19 +2466,21 @@ fd_vote_program_execute( fd_exec_instr_ctx_t * ctx ) {
     return FD_EXECUTOR_INSTR_ERR_INVALID_ACC_OWNER;
   }
 
-  /* Replicate vote account changes to bank caches after processing the
-     transaction's instructions. */
+  /* Mark vote account as dirty to trigger cache updates after processing */
   ctx->txn_ctx->dirty_vote_acc = 1;
 
+  /* Extract transaction signers for authorization checks */
   // https://github.com/anza-xyz/agave/blob/v2.0.1/programs/vote/src/vote_processor.rs#L69
   fd_pubkey_t const * signers[FD_TXN_SIG_MAX] = { 0 };
   fd_exec_instr_ctx_get_signers( ctx, signers );
 
+  /* Validate instruction data is present */
   // https://github.com/anza-xyz/agave/blob/v2.0.1/programs/vote/src/vote_processor.rs#L70
   if( FD_UNLIKELY( ctx->instr->data==NULL ) ) {
     return FD_EXECUTOR_INSTR_ERR_INVALID_INSTR_DATA;
   }
 
+  /* Decode the vote instruction from bincode format */
   int decode_result;
   ulong decoded_sz;
   fd_vote_instruction_t * instruction = fd_bincode_decode1_spad(
@@ -2312,26 +2488,46 @@ fd_vote_program_execute( fd_exec_instr_ctx_t * ctx ) {
       ctx->instr->data, ctx->instr->data_sz,
       &decode_result,
       &decoded_sz );
+  
+  /* Validate instruction decoding succeeded */
   if( FD_UNLIKELY( decode_result != FD_BINCODE_SUCCESS ) ) {
     return FD_EXECUTOR_INSTR_ERR_INVALID_INSTR_DATA;
   }
+  
+  /* Validate decoded size is reasonable */
   if( FD_UNLIKELY( decoded_sz > FD_TXN_MTU ) ) {
     return FD_EXECUTOR_INSTR_ERR_INVALID_INSTR_DATA;
   }
 
-  /* PLEASE PRESERVE SWITCH-CASE ORDERING TO MIRROR LABS IMPL:
-   */
+  /* Route to appropriate instruction handler based on discriminant.
+   * IMPORTANT: Case ordering preserved to match Agave implementation
+   * for behavioral compatibility. */
   switch( instruction->discriminant ) {
 
-  /* InitializeAccount
+  /**
+   * InitializeAccount - Creates and initializes a new vote account
    *
-   * Instruction:
-   * https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/instruction.rs#L32
+   * DESCRIPTION:
+   * Sets up a fresh vote account with initial validator identity, vote authority,
+   * withdraw authority, and commission rate. This must be called before any
+   * other vote operations.
    *
-   * Processor:
-   * https://github.com/anza-xyz/agave/blob/v2.0.1/programs/vote/src/vote_processor.rs#L71
+   * ACCOUNTS REQUIRED:
+   * - [0] Vote account (writable, must be rent-exempt)
+   * - [1] Rent sysvar (readable)
+   * - [2] Clock sysvar (readable)
+   * - [3] Validator identity (signer)
+   *
+   * VALIDATION:
+   * - Vote account must have sufficient lamports for rent exemption
+   * - Must be signed by the new validator identity
+   * - Account must not already be initialized
+   *
+   * Instruction: https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/instruction.rs#L32
+   * Processor: https://github.com/anza-xyz/agave/blob/v2.0.1/programs/vote/src/vote_processor.rs#L71
    */
   case fd_vote_instruction_enum_initialize_account: {
+    /* Validate rent sysvar account and read rent parameters */
     // https://github.com/anza-xyz/agave/blob/v2.0.1/programs/vote/src/vote_processor.rs#L72
     rc = fd_sysvar_instr_acct_check( ctx, 1, &fd_sysvar_rent_id );
     if( FD_UNLIKELY( rc ) ) return rc;
@@ -2339,10 +2535,12 @@ fd_vote_program_execute( fd_exec_instr_ctx_t * ctx ) {
     fd_rent_t const * rent = fd_sysvar_cache_rent_read( ctx->sysvar_cache, &rent_ );
     if( FD_UNLIKELY( !rent ) ) return FD_EXECUTOR_INSTR_ERR_UNSUPPORTED_SYSVAR;
 
+    /* Ensure vote account has sufficient lamports for rent exemption */
     if( FD_UNLIKELY( fd_borrowed_account_get_lamports( &me ) <
                      fd_rent_exempt_minimum_balance( rent, fd_borrowed_account_get_data_len( &me ) ) ) )
       return FD_EXECUTOR_INSTR_ERR_INSUFFICIENT_FUNDS;
 
+    /* Validate clock sysvar account and read current time */
     // https://github.com/anza-xyz/agave/blob/v2.0.1/programs/vote/src/vote_processor.rs#L76
     rc = fd_sysvar_instr_acct_check( ctx, 2, &fd_sysvar_clock_id );
     if( FD_UNLIKELY( rc ) ) return rc;
@@ -2350,6 +2548,7 @@ fd_vote_program_execute( fd_exec_instr_ctx_t * ctx ) {
     fd_sol_sysvar_clock_t const * clock = fd_sysvar_cache_clock_read( ctx->sysvar_cache, &clock_ );
     if( FD_UNLIKELY( !clock ) ) return FD_EXECUTOR_INSTR_ERR_UNSUPPORTED_SYSVAR;
 
+    /* Initialize the vote account with provided parameters */
     // https://github.com/anza-xyz/agave/blob/v2.0.1/programs/vote/src/vote_processor.rs#L78
     rc = initialize_account( &me,
                              &instruction->inner.initialize_account,
@@ -2513,29 +2712,47 @@ fd_vote_program_execute( fd_exec_instr_ctx_t * ctx ) {
     break;
   }
 
-  /* Vote
+  /**
+   * Vote/VoteSwitch - Submit validator votes (LEGACY - being deprecated)
    *
-   * Instruction:
-   * https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/instruction.rs#L49
+   * DESCRIPTION:
+   * These are the original vote submission instructions. Vote submits votes
+   * for specific slots, while VoteSwitch additionally includes a hash proof
+   * for fork switching. Both instructions are being deprecated in favor of
+   * the more efficient UpdateVoteState variants.
+   *
+   * ACCOUNTS REQUIRED:
+   * - [0] Vote account (writable)
+   * - [1] Slot hashes sysvar (readable)
+   * - [2] Clock sysvar (readable)
+   * - [3] Vote authority (signer)
+   *
+   * TOWER BFT MECHANICS:
+   * - Validates votes against slot hash history
+   * - Implements exponential lockout periods
+   * - Prevents voting on conflicting forks
+   * - Updates epoch credits for rewards
+   *
+   * DEPRECATION:
+   * These instructions are disabled when deprecate_legacy_vote_ixs feature
+   * is active. Use UpdateVoteState variants instead.
+   *
+   * Vote: https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/instruction.rs#L49
+   * VoteSwitch: https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/instruction.rs#L81
+   * Processor: https://github.com/anza-xyz/agave/blob/v2.0.1/programs/vote/src/vote_processor.rs#L154
    */
   case fd_vote_instruction_enum_vote:;
     /* clang-format off */
     __attribute__((fallthrough));
     /* clang-format on */
 
-  /* VoteSwitch
-   *
-   * Instruction:
-   * https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/instruction.rs#L81
-   *
-   * Processor:
-   * https://github.com/anza-xyz/agave/blob/v2.0.1/programs/vote/src/vote_processor.rs#L154
-   */
   case fd_vote_instruction_enum_vote_switch: {
+    /* Check if legacy vote instructions are deprecated */
     if( FD_FEATURE_ACTIVE_BANK( ctx->txn_ctx->bank, deprecate_legacy_vote_ixs ) ) {
       return FD_EXECUTOR_INSTR_ERR_INVALID_INSTR_DATA;
     }
 
+    /* Extract vote data from either Vote or VoteSwitch instruction */
     fd_vote_t * vote;
     if( instruction->discriminant == fd_vote_instruction_enum_vote ) {
       vote = &instruction->inner.vote;
@@ -2545,11 +2762,13 @@ fd_vote_program_execute( fd_exec_instr_ctx_t * ctx ) {
       __builtin_unreachable();
     }
 
+    /* Validate slot hashes sysvar for vote verification */
     // https://github.com/anza-xyz/agave/blob/v2.0.1/programs/vote/src/vote_processor.rs#L155
     int err;
     err = fd_sysvar_instr_acct_check( ctx, 1, &fd_sysvar_slot_hashes_id );
     if( FD_UNLIKELY( err ) ) return err;
 
+    /* Ensure slot hashes sysvar is accessible */
     if( FD_UNLIKELY( !fd_sysvar_cache_slot_hashes_is_valid( ctx->sysvar_cache ) ) ) {
       return FD_EXECUTOR_INSTR_ERR_UNSUPPORTED_SYSVAR;
     }
@@ -2684,31 +2903,59 @@ fd_vote_program_execute( fd_exec_instr_ctx_t * ctx ) {
     break;
   }
 
-  /* TowerSync(Switch)
+  /**
+   * TowerSync/TowerSyncSwitch - Synchronize local tower with on-chain vote state
    *
-   * Instruction:
-   * https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/instruction.rs#L151-L157
+   * DESCRIPTION:
+   * These instructions allow validators to efficiently sync their local tower
+   * (voting history) with the on-chain vote account state. This is crucial for
+   * validator restart scenarios and maintaining consensus safety.
    *
-   * Processor:
-   * https://github.com/anza-xyz/agave/blob/v2.0.1/programs/vote/src/vote_processor.rs#L196-L215
+   * ACCOUNTS REQUIRED:
+   * - [0] Vote account (writable)  
+   * - [1] Vote authority (signer)
+   *
+   * TOWER SYNCHRONIZATION:
+   * - Validates that local tower state matches on-chain history
+   * - Ensures no safety violations (conflicting votes)
+   * - Maintains exponential lockout properties
+   * - Allows safe validator restarts without losing consensus progress
+   *
+   * DIFFERENCE FROM REGULAR VOTES:
+   * - TowerSync: Sync local tower state only
+   * - TowerSyncSwitch: Sync tower state + include fork switch proof
+   * - More efficient than submitting individual historical votes
+   * - Preserves Tower BFT safety guarantees
+   *
+   * USE CASES:
+   * - Validator restart after downtime
+   * - Recovering from local state corruption
+   * - Migrating validator to new infrastructure
+   * - Emergency consensus recovery scenarios
+   *
+   * Instruction: https://github.com/anza-xyz/agave/blob/v2.0.1/sdk/program/src/vote/instruction.rs#L151-L157
+   * Processor: https://github.com/anza-xyz/agave/blob/v2.0.1/programs/vote/src/vote_processor.rs#L196-L215
    */
-
   case fd_vote_instruction_enum_tower_sync:
   case fd_vote_instruction_enum_tower_sync_switch: {
+    /* Extract tower sync data from either variant */
     fd_tower_sync_t * tower_sync = (instruction->discriminant == fd_vote_instruction_enum_tower_sync)
         ? &instruction->inner.tower_sync
         : &instruction->inner.tower_sync_switch.tower_sync;
 
+    /* Ensure slot hashes sysvar is accessible for validation */
     if( FD_LIKELY( !fd_sysvar_cache_slot_hashes_is_valid( ctx->sysvar_cache ) ) ) {
       return FD_EXECUTOR_INSTR_ERR_UNSUPPORTED_SYSVAR;
     }
 
+    /* Read clock sysvar for timestamp validation */
     fd_sol_sysvar_clock_t clock_;
     fd_sol_sysvar_clock_t const * clock = fd_sysvar_cache_clock_read( ctx->sysvar_cache, &clock_ );
     if( FD_UNLIKELY( !clock ) ) {
       return FD_EXECUTOR_INSTR_ERR_UNSUPPORTED_SYSVAR;
     }
 
+    /* Process the tower synchronization with slot hash validation */
     fd_slot_hash_t const * slot_hashes = fd_sysvar_cache_slot_hashes_join_const( ctx->sysvar_cache );
     FD_TEST( slot_hashes );
     rc = process_tower_sync( &me, slot_hashes, clock, tower_sync, signers, ctx );
@@ -2939,18 +3186,75 @@ upsert_vote_account( fd_txn_account_t *   vote_account,
   }
 }
 
+/**
+ * fd_vote_store_account - Update bank vote account caches after processing
+ *
+ * DESCRIPTION:
+ * Updates the bank's vote account cache after a vote account has been
+ * modified by a transaction. This ensures the stake/reward calculation
+ * systems have up-to-date vote account information.
+ *
+ * CACHE MANAGEMENT:
+ * - Removes vote accounts with zero lamports (closed accounts)
+ * - Updates existing vote accounts with new state
+ * - Maintains stake-weighted vote account mappings
+ * - Critical for epoch boundary reward calculations
+ *
+ * @param vote_account  Vote account that was modified
+ * @param bank         Bank containing vote account caches to update
+ */
 void
 fd_vote_store_account( fd_txn_account_t *   vote_account,
                        fd_bank_t *          bank ) {
   fd_pubkey_t const * owner = fd_txn_account_get_owner( vote_account );
 
+  /* Only process accounts owned by the vote program */
   if (memcmp(owner->uc, fd_solana_vote_program_id.key, sizeof(fd_pubkey_t)) != 0) {
       return;
   }
 
+  /* Remove accounts with zero lamports (closed), otherwise update cache */
   if( fd_txn_account_get_lamports( vote_account ) == 0 ) {
     remove_vote_account( vote_account, bank );
   } else {
     upsert_vote_account( vote_account, bank );
   }
 }
+
+/**********************************************************************/
+/* END OF FIREDANCER VOTE PROGRAM IMPLEMENTATION                     */
+/*                                                                    */
+/* ARCHITECTURE SUMMARY:                                             */
+/*                                                                    */
+/* This file implements Solana's Vote Program, which manages:        */
+/* - Validator consensus participation (Tower BFT)                   */
+/* - Vote account state and authorization                            */
+/* - Epoch credits for staking rewards                               */
+/* - Commission rates for delegation                                 */
+/*                                                                    */
+/* KEY COMPONENTS:                                                    */
+/* 1. Instruction Processing (16 instruction types)                  */
+/* 2. Tower BFT Lockout Logic (exponential consensus safety)         */
+/* 3. Vote State Management (versioned serialization)               */
+/* 4. Authorization System (vote/withdraw authorities)               */
+/* 5. Epoch Credits Tracking (reward calculation basis)              */
+/*                                                                    */
+/* SECURITY PROPERTIES:                                              */
+/* - All operations require proper cryptographic signatures          */
+/* - Tower BFT prevents unsafe fork switches                         */
+/* - Vote timing validated against slot hash history                 */
+/* - Commission updates restricted to specific timing windows        */
+/* - Account ownership strictly enforced                             */
+/*                                                                    */
+/* PERFORMANCE CHARACTERISTICS:                                      */
+/* - Fixed 2100 compute unit cost per instruction                    */
+/* - Optimized for high-frequency vote submissions                   */
+/* - Efficient compact vote state encoding                           */
+/* - Minimal memory allocations using spad                           */
+/*                                                                    */
+/* COMPATIBILITY:                                                     */
+/* - Maintains exact behavioral parity with Agave implementation     */
+/* - Supports all historical vote state formats                      */
+/* - Respects feature activation for instruction deprecation         */
+/* - Preserves instruction processing order for determinism          */
+/**********************************************************************/
