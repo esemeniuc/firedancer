@@ -57,7 +57,7 @@
         }
       ]
     }, 
-     {
+    {
       "name": "C/C++ Debug bench",
       "type": "cppdbg",
       "request": "launch",
@@ -67,6 +67,7 @@
       "cwd": "${workspaceFolder}",
       "environment": [],
       "focusWindowOnBreak": false,
+      "miDebuggerPath": "${workspaceFolder}/build/native/gcc/bin/fddbg",
       "MIMode": "gdb",
       "setupCommands": [
         {
