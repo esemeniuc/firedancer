@@ -296,6 +296,9 @@ fd_config_extract_pod( uchar *       pod,
   CFG_POP      ( cstr,   development.netns.interface1_addr                );
 
   CFG_POP      ( bool,   development.gossip.allow_private_address         );
+  if( FD_UNLIKELY( config->is_firedancer ) ) {
+    CFG_POP_ARRAY( cstr,   development.gossip.snapshot_peers              );
+  }
 
   CFG_POP      ( ulong,  development.genesis.hashes_per_tick              );
   CFG_POP      ( ulong,  development.genesis.target_tick_duration_micros  );

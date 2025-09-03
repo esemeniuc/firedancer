@@ -514,6 +514,8 @@ struct fd_topo_tile {
       uint  maximum_download_retry_abort;
       uint  max_full_snapshots_to_keep;
       uint  max_incremental_snapshots_to_keep;
+      ulong         resolved_snapshot_peers_cnt;
+      fd_ip4_port_t resolved_snapshot_peers[ 8UL ];
     } snaprd;
 
     struct {
@@ -525,7 +527,7 @@ struct fd_topo_tile {
       ushort bind_port;
 
       ushort expected_shred_version;
-      ulong entrypoints_cnt;
+      ulong  entrypoints_cnt;
       fd_ip4_port_t entrypoints[ FD_TOPO_GOSSIP_ENTRYPOINTS_MAX ];
     } ipecho;
 

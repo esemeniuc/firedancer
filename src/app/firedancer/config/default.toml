@@ -1445,6 +1445,11 @@ user = ""
         # located on a private internet (rfc1918).
         allow_private_address = false
 
+        # A list of peers that the validator will try to pull snapshots
+        # from.  This is unrelated to known validators and is only meant
+        # for development purposes.
+        snapshot_peers = []
+
     [development.genesis]
         # When creating a new chain from genesis during development,
         # this option can be used to specify the number of hashes in

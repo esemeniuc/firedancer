@@ -764,8 +764,11 @@ unprivileged_init( fd_topo_t *      topo,
   }
 
   if( FD_UNLIKELY( !has_gossip_in ) ) {
-    if( FD_LIKELY( !strcmp( tile->snaprd.cluster, "testnet" ) ) ) {
-      FD_LOG_NOTICE(( "no gossip input link found, using initial peers for testnet" ));
+    FD_LOG_NOTICE(( "no gossip input link found, using initial peers for downloading snapshot" ));
+    if( FD_UNLIKELY( tile->snaprd.resolved_snapshot_peers_cnt>0 ) ) {
+      for( ulong i=0UL; i<tile->snaprd.resolved_snapshot_peers_cnt; i++ )
+        fd_ssping_add( ctx->ssping, tile->snaprd.resolved_snapshot_peers[ i ] );
+    } else if( FD_LIKELY( !strcmp( tile->snaprd.cluster, "testnet" ) ) ) {
       fd_ip4_port_t initial_peers[ 2UL ] = {
         { .addr = FD_IP4_ADDR( 35 , 214, 172, 227 ), .port = fd_ushort_bswap(8899) },
         { .addr = FD_IP4_ADDR( 145, 40 , 95 , 69  ), .port = fd_ushort_bswap(8899) }, /* Solana testnet peer */

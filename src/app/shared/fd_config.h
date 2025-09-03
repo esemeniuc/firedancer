@@ -295,7 +295,9 @@ struct fd_config {
     } netns;
 
     struct {
-      int allow_private_address;
+      int   allow_private_address;
+      char  snapshot_peers[ 8UL ][ 262 ];
+      ulong snapshot_peers_cnt;
     } gossip;
 
     struct {
@@ -404,9 +406,9 @@ struct fd_config {
       uint   max_pending_shred_sets;
       ushort shred_listen_port;
       ulong  additional_shred_destinations_retransmit_cnt;
-      char   additional_shred_destinations_retransmit[ FD_TOPO_ADTL_DESTS_MAX ][ sizeof("255.255.255.255:65536") ];
+      char   additional_shred_destinations_retransmit[ FD_TOPO_ADTL_DESTS_MAX ][ IP4_PORT_STR_MAX ];
       ulong  additional_shred_destinations_leader_cnt;
-      char   additional_shred_destinations_leader[ FD_TOPO_ADTL_DESTS_MAX ][ sizeof("255.255.255.255:65536") ];
+      char   additional_shred_destinations_leader[ FD_TOPO_ADTL_DESTS_MAX ][ IP4_PORT_STR_MAX ];
     } shred;
 
     struct {

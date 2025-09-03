@@ -189,6 +189,12 @@ setup_snapshots( config_t *       config,
   tile->snaprd.maximum_download_retry_abort      = config->firedancer.snapshots.maximum_download_retry_abort;
   tile->snaprd.max_full_snapshots_to_keep        = config->firedancer.snapshots.max_full_snapshots_to_keep;
   tile->snaprd.max_incremental_snapshots_to_keep = config->firedancer.snapshots.max_incremental_snapshots_to_keep;
+  tile->snaprd.resolved_snapshot_peers_cnt       = config->development.gossip.snapshot_peers_cnt;
+  for( ulong i=0UL; i<config->development.gossip.snapshot_peers_cnt; i++ ) {
+    if( FD_UNLIKELY( 0==resolve_gossip_entrypoint( config->development.gossip.snapshot_peers[ i ], &tile->snaprd.resolved_snapshot_peers[ i ] ) )) {
+      FD_LOG_ERR(( "failed to resolve address of [development.gossip.snapshot_peers] entry \"%s\"", config->development.gossip.snapshot_peers[ i ] ));
+    }
+  }
   /* TODO: set up known validators and known validators cnt */
 }
 
