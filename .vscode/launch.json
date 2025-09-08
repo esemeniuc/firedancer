@@ -37,37 +37,12 @@
       "name": "C/C++ Debug backtest",
       "type": "cppdbg",
       "request": "launch",
-      "program": "${workspaceFolder}/build/native/gcc/bin/firedancer-dev",
-      "args": [ "backtest", "--config", "${workspaceFolder}/dump/testnet-340269866-v2.3.0_backtest.toml" ],
+      "program": "${workspaceFolder}/build/native/gcc/unit-test/test_ssmanifest_parser",
+      "args": [ "/home/jsiegel/manifest.bin" ],
       "stopAtEntry": true,
       "cwd": "${workspaceFolder}",
       "environment": [],
       "focusWindowOnBreak": false,
-      "MIMode": "gdb",
-      "setupCommands": [
-        {
-          "description": "Enable pretty-printing for gdb",
-          "text": "-enable-pretty-printing",
-          "ignoreFailures": true
-        },
-        {
-          "description": "Set Disassembly Flavor to Intel",
-          "text": "-gdb-set disassembly-flavor intel",
-          "ignoreFailures": true
-        }
-      ]
-    }, 
-    {
-      "name": "C/C++ Debug bench",
-      "type": "cppdbg",
-      "request": "launch",
-      "program": "${workspaceFolder}/build/native/gcc/bin/firedancer-dev",
-      "args": [ "--no-sandbox", "bench" ],
-      "stopAtEntry": true,
-      "cwd": "${workspaceFolder}",
-      "environment": [],
-      "focusWindowOnBreak": false,
-      "miDebuggerPath": "${workspaceFolder}/build/native/gcc/bin/fddbg",
       "MIMode": "gdb",
       "setupCommands": [
         {
