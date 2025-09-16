@@ -1127,6 +1127,43 @@ immediately prior epoch.  Recent non-rooted slots may be included, and
 included skipped slots will not become unskipped as a later slot has
 rooted.
 
+#### `slot.limits`
+| frequency      | type         | example |
+|----------------|--------------|---------|
+ *Once* + *Live* | `SlotLimits` | below   |
+
+A list of the current slot-level resource limits which block producers
+must follow when publishing a block to the chain. In the typicaly case,
+these are fixed and sent once.  Occasionally, these may change due to
+on-chain feature gate activations, in which case a new message will be
+sent with the updated limits. Note that some limits are imposed by the
+Solana protocol, while others are specific to the firdancer client.
+
+:::details Example
+
+```json
+{
+    "total_compute_units": 100000000,
+    "vote_compute_units": 12000000,
+    "writable_account_compute_units": 40000000,
+    "data_bytes": 123456789,
+    "txn_cnt": 65536,
+    "microblock_cnt": 4096,
+}
+```
+
+:::
+
+**`SlotLimits`**
+| Field                          | Type     | Description |
+|--------------------------------|----------|-------------|
+| total_compute_units            | `number` | The maximum compute units from all transactions that can be included in a block |
+| vote_compute_units             | `number` | The maximum compute units from vote transactions that can be included in a block |
+| writable_account_compute_units | `number` | The compute units that a transaction consumes count towards the compute unit "consumption" for each of the writable accounts it lists. This limit is the maximum per-writable-account compute units that can be included in a block |
+| data_bytes                     | `number` | The maximum data bytes that could be packed into a firedancer block.  This is not a consensus-critical limit, but is instead derived from the consensus-critical limit on the number of shreds in the block.  This limit is designed as a stronger contrstraint than the shred limit; if this limit is met then the shred limit will also be met |
+| txn_cnt                        | `number` | The maximum number of transactions that could be included in a firedancer block.  This is not a consensus-critical limit, but is instead imposed by firedancer to limit memory consumption |
+| microblock_cnt                 | `number` | The maximum number of microblocks that could be included in a firedancer block.  This is not a consensus-critical limit, but is instead imposed by firedancer to limit memory consumption |
+
 #### `slot.update`
 | frequency   | type          | example |
 |-------------|---------------|---------|

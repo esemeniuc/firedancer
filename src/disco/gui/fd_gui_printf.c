@@ -304,6 +304,20 @@ fd_gui_printf_skipped_history_cluster( fd_gui_t * gui ) {
 }
 
 void
+fd_gui_printf_slot_limits( fd_gui_t * gui ) {
+  jsonp_open_envelope( gui, "slot", "skipped_history" );
+    jsonp_open_object( gui, "value" );
+      jsonp_ulong( gui, "total_compute_units",            gui->summary.scheduler_limits->max_cost_per_block        );
+      jsonp_ulong( gui, "vote_compute_units",             gui->summary.scheduler_limits->max_vote_cost_per_block   );
+      jsonp_ulong( gui, "writable_account_compute_units", gui->summary.scheduler_limits->max_write_cost_per_acct   );
+      jsonp_ulong( gui, "data_bytes",                     gui->summary.scheduler_limits->max_data_bytes_per_block  );
+      jsonp_ulong( gui, "txn_cnt",                        gui->summary.scheduler_limits->max_txn_per_microblock    );
+      jsonp_ulong( gui, "microblock_cnt",                 gui->summary.scheduler_limits->max_microblocks_per_block );
+    jsonp_close_object( gui );
+  jsonp_close_envelope( gui );
+}
+
+void
 fd_gui_printf_tps_history( fd_gui_t * gui ) {
   jsonp_open_envelope( gui->http, "summary", "tps_history" );
     jsonp_open_array( gui->http, "value" );

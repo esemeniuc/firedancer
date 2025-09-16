@@ -7,6 +7,7 @@
 #include "../../waltz/http/fd_http_server.h"
 #include "../../flamenco/leaders/fd_leaders.h"
 #include "../../util/hist/fd_histf.h"
+#include "../../disco/pack/fd_pack.h"
 
 #include "../topo/fd_topo.h"
 
@@ -434,6 +435,8 @@ struct fd_gui {
     ulong slot_caught_up;
 
     fd_gui_shred_slot_t slots_max_known[ FD_GUI_SHRED_SLOT_HISTORY_SZ+1UL ];
+
+    fd_pack_limits_t scheduler_limits[ 1 ];
 
     ulong estimated_tps_history_idx;
     ulong estimated_tps_history[ FD_GUI_TPS_HISTORY_SAMPLE_CNT ][ 3UL ];
