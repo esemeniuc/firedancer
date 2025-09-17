@@ -227,7 +227,7 @@ fd_txn_meta_to_json( fd_webserver_t * ws,
   EMIT_SIMPLE("]},\"logMessages\":[");
   for (pb_size_t i = 0; i < txn_status.log_messages_count; ++i) {
     if( i ) EMIT_SIMPLE(",");
-    fd_web_reply_encode_json_string(ws, txn_status.log_messages[i]);
+    fd_web_reply_encode_json_string(ws, txn_status.log_messages[i], ULONG_MAX);
   }
   EMIT_SIMPLE("],\"postBalances\":[");
   for (pb_size_t i = 0; i < txn_status.post_balances_count; ++i)
@@ -454,6 +454,22 @@ bpf_loader_program_to_json( fd_webserver_t * ws,
   return NULL;
 }
 
+static const char *
+memo_program_to_json( fd_webserver_t * ws,
+
+                      fd_txn_t * txn,
+                      fd_txn_instr_t * instr,
+                      const uchar * raw,
+                      int * need_comma,
+                      fd_spad_t * spad ) {
+  (void)txn;
+  (void)spad;
+  if( *need_comma ) EMIT_SIMPLE(",");
+  *need_comma = 1;
+  fd_web_reply_encode_json_string( ws, (const char *)(raw + instr->data_off), instr->data_sz );
+  return NULL;
+}
+
 const char*
 fd_instr_to_json( fd_webserver_t * ws,
                   fd_txn_t * txn,
@@ -501,6 +517,8 @@ fd_instr_to_json( fd_webserver_t * ws,
       return bpf_loader_program_to_json( ws, txn, instr, raw, need_comma, spad );
     } else if( !memcmp( prog, fd_solana_bpf_loader_upgradeable_program_id.key, sizeof(fd_pubkey_t) ) ) {
       return bpf_loader_program_to_json( ws, txn, instr, raw, need_comma, spad );
+    } else if( !memcmp( prog, fd_solana_memo_program_id.key, sizeof(fd_pubkey_t) ) ) {
+      return memo_program_to_json( ws, txn, instr, raw, need_comma, spad );
     } else {
       generic_program_to_json( ws, txn, instr, raw, need_comma, spad );
     }

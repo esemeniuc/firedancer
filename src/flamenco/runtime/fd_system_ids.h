@@ -44,6 +44,7 @@ extern const fd_pubkey_t fd_solana_spl_token_id;
 extern const fd_pubkey_t fd_solana_zk_token_proof_program_id;
 extern const fd_pubkey_t fd_solana_zk_elgamal_proof_program_id;
 extern const fd_pubkey_t fd_solana_slashing_program_id;
+extern const fd_pubkey_t fd_solana_memo_program_id;
 
 /* Buffer accounts for BPF migrations
    https://github.com/anza-xyz/agave/blob/v2.1.6/runtime/src/bank/builtins/mod.rs#L151-L165 */

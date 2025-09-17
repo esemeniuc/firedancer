@@ -104,7 +104,7 @@ fd_web_reply_error( fd_webserver_t * ws, int errcode, const char * text, const c
   ws->quick_size = 0;
   fd_http_server_stage_trunc(ws->server, ws->prev_reply_len);
   fd_web_reply_sprintf(ws, "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":%d,\"message\":", errcode);
-  fd_web_reply_encode_json_string(ws, text);
+  fd_web_reply_encode_json_string(ws, text, ULONG_MAX);
   fd_web_reply_sprintf(ws, "},\"id\":%s}", call_id );
 }
 
@@ -490,7 +490,7 @@ fd_web_reply_sprintf( fd_webserver_t * ws, const char* format, ... ) {
 }
 
 int
-fd_web_reply_encode_json_string( fd_webserver_t * ws, const char * str ) {
+fd_web_reply_encode_json_string( fd_webserver_t * ws, const char * str, ulong max_len ) {
   char buf[512];
   buf[0] = '"';
   ulong buflen = 1;
@@ -532,6 +532,7 @@ fd_web_reply_encode_json_string( fd_webserver_t * ws, const char * str ) {
     }
 
     ++str;
+    if( --max_len <= 0 ) break;
   }
   buf[buflen++] = '"';
   return fd_web_reply_append( ws, buf, buflen );
