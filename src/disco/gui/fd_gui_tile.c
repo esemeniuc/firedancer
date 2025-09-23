@@ -52,6 +52,8 @@ static fd_http_static_file_t * STATIC_FILES;
 #define IN_KIND_GOSSIP_OUT   ( 8UL) /* firedancer only */
 #define IN_KIND_SNAPRD       ( 9UL) /* firedancer only */
 #define IN_KIND_REPAIR_NET   (10UL) /* firedancer only */
+#define IN_KIND_REPLAY_OUT   (11UL) /* firedancer only */
+#define IN_KIND_TOWER        (12UL) /* firedancer only */
 
 FD_IMPORT_BINARY( firedancer_svg, "book/public/fire.svg" );
 
@@ -258,6 +260,21 @@ after_frag( fd_gui_ctx_t *      ctx,
     case IN_KIND_PLUGIN: {
       FD_TEST( !ctx->is_full_client );
       fd_gui_plugin_message( ctx->gui, sig, ctx->buf, fd_clock_now( ctx->clock ) );
+      break;
+    }
+    case IN_KIND_TOWER: {
+      FD_TEST( ctx->is_full_client );
+      fd_tower_slot_done_t const * tower = (fd_tower_slot_done_t const *)ctx->buf;
+      fd_gui_handle_tower_update( ctx->gui, tower, fd_clock_now( ctx->clock ) );
+      break;
+    }
+    case IN_KIND_REPLAY_OUT: {
+      if( FD_UNLIKELY( sig==REPLAY_SIG_SLOT_COMPLETED ) ) {
+          fd_replay_slot_completed_t const * replay =  (fd_replay_slot_completed_t const *)ctx->buf;
+          fd_gui_handle_replay_update( ctx->gui, replay, fd_clock_now( ctx->clock ) );
+      } else {
+        return;
+      }
       break;
     }
     case IN_KIND_SHRED_OUT: {
@@ -624,6 +641,8 @@ unprivileged_init( fd_topo_t *      topo,
     else if( FD_LIKELY( !strcmp( link->name, "gossip_out" ) ) ) ctx->in_kind[ i ] = IN_KIND_GOSSIP_OUT; /* full client only */
     else if( FD_LIKELY( !strcmp( link->name, "snaprd_out" ) ) ) ctx->in_kind[ i ] = IN_KIND_SNAPRD;     /* full client only */
     else if( FD_LIKELY( !strcmp( link->name, "repair_net" ) ) ) ctx->in_kind[ i ] = IN_KIND_REPAIR_NET; /* full client only */
+    else if( FD_LIKELY( !strcmp( link->name, "replay_out" ) ) ) ctx->in_kind[ i ] = IN_KIND_REPLAY_OUT; /* full client only */
+    else if( FD_LIKELY( !strcmp( link->name, "tower_out"  ) ) ) ctx->in_kind[ i ] = IN_KIND_TOWER;      /* full client only */
     else FD_LOG_ERR(( "gui tile has unexpected input link %lu %s", i, link->name ));
 
     if( FD_LIKELY( !strcmp( link->name, "bank_poh" ) ) ) {
