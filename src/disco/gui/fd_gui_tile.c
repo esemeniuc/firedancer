@@ -29,6 +29,7 @@ static fd_http_static_file_t * STATIC_FILES;
 #include "../../util/clock/fd_clock.h"
 #include "../../discof/repair/fd_repair.h"
 #include "../../flamenco/gossip/fd_gossip_private.h"
+#include "../../discof/tower/fd_tower_tile.h"
 
 #include <sys/types.h>
 #include <unistd.h>

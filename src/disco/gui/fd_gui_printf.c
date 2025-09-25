@@ -1570,7 +1570,7 @@ fd_gui_printf_boot_progress( fd_gui_t * gui ) {
       switch( gui->summary.boot_progress.phase ) {
         case FD_GUI_BOOT_PROGRESS_TYPE_JOINING_GOSSIP:               jsonp_string( gui->http, "phase", "joining_gossip" );        break;
         case FD_GUI_BOOT_PROGRESS_TYPE_LOADING_FULL_SNAPSHOT:        jsonp_string( gui->http, "phase", "loading_full_snapshot" ); break;
-        case FD_GUI_BOOT_PROGRESS_TYPE_LOADING_INCREMENTAL_SNAPSHOT: jsonp_string( gui->http, "phase", "loading_incr_snapshot" ); break;
+        case FD_GUI_BOOT_PROGRESS_TYPE_LOADING_INCREMENTAL_SNAPSHOT: jsonp_string( gui->http, "phase", "loading_incremental_snapshot" ); break;
         case FD_GUI_BOOT_PROGRESS_TYPE_CATCHING_UP:                  jsonp_string( gui->http, "phase", "catching_up" );           break;
         case FD_GUI_BOOT_PROGRESS_TYPE_RUNNING:                      jsonp_string( gui->http, "phase", "running" );               break;
         default: FD_LOG_ERR(( "unknown phase %d", gui->summary.startup_progress.phase ));
@@ -1861,19 +1861,31 @@ fd_gui_printf_shred_updates( fd_gui_t * gui ) {
   ulong  _start_offset = gui->shreds.staged_next_broadcast;
   ulong  _end_offset   = gui->shreds.staged_tail;
 
+
   jsonp_open_envelope( gui->http, "slot", "live_shreds" );
     jsonp_open_object( gui->http, "value" );
         jsonp_open_array( gui->http, "slots" );
-          for( ulong i=_start_offset; i<_end_offset; i++ ) jsonp_ulong( gui->http, NULL, gui->shreds.staged[ i % FD_GUI_SHREDS_STAGING_SZ ].slot );
+          for( ulong i=_start_offset; i<_end_offset; i++ ) {
+            /* todo fix .. we're downsampling to reduce bandwidth. */
+            if( FD_LIKELY( gui->shreds.staged[ i % FD_GUI_SHREDS_STAGING_SZ ].shred_idx % 5 != 0 ) ) continue;
+
+            jsonp_ulong( gui->http, NULL, gui->shreds.staged[ i % FD_GUI_SHREDS_STAGING_SZ ].slot );
+          }
         jsonp_close_array( gui->http );
         jsonp_open_array( gui->http, "shred_idx" );
           for( ulong i=_start_offset; i<_end_offset; i++ ) {
+            /* todo fix .. we're downsampling to reduce bandwidth. */
+            if( FD_LIKELY( gui->shreds.staged[ i % FD_GUI_SHREDS_STAGING_SZ ].shred_idx % 5 != 0 ) ) continue;
+
             if( FD_LIKELY( gui->shreds.staged[ i % FD_GUI_SHREDS_STAGING_SZ ].shred_idx!=USHORT_MAX ) ) jsonp_ulong( gui->http, NULL, gui->shreds.staged[ i % FD_GUI_SHREDS_STAGING_SZ ].shred_idx );
             else                                                                                        jsonp_null ( gui->http, NULL );
           }
         jsonp_close_array( gui->http );
         jsonp_open_array( gui->http, "event" );
           for( ulong i=_start_offset; i<_end_offset; i++ ) {
+            /* todo fix .. we're downsampling to reduce bandwidth. */
+            if( FD_LIKELY( gui->shreds.staged[ i % FD_GUI_SHREDS_STAGING_SZ ].shred_idx % 5 != 0 ) ) continue;
+
             switch( gui->shreds.staged[ i % FD_GUI_SHREDS_STAGING_SZ ].event ) {
               case FD_GUI_SLOT_SHRED_REPAIR_REQUEST:         jsonp_string( gui->http, NULL, "repair_request" ); break;
               case FD_GUI_SLOT_SHRED_SHRED_RECEIVED_TURBINE: jsonp_string( gui->http, NULL, "shred_received" ); break;
@@ -1885,7 +1897,12 @@ fd_gui_printf_shred_updates( fd_gui_t * gui ) {
           }
         jsonp_close_array( gui->http );
         jsonp_open_array( gui->http, "event_ts" );
-          for( ulong i=_start_offset; i<_end_offset; i++ ) jsonp_long_as_str( gui->http, NULL, gui->shreds.staged[ i % FD_GUI_SHREDS_STAGING_SZ ].timestamp );
+          for( ulong i=_start_offset; i<_end_offset; i++ ) {
+            /* todo fix .. we're downsampling to reduce bandwidth. */
+            if( FD_LIKELY( gui->shreds.staged[ i % FD_GUI_SHREDS_STAGING_SZ ].shred_idx % 5 != 0 ) ) continue;
+
+            jsonp_long_as_str( gui->http, NULL, gui->shreds.staged[ i % FD_GUI_SHREDS_STAGING_SZ ].timestamp );
+          }
         jsonp_close_array( gui->http );
     jsonp_close_object( gui->http );
   jsonp_close_envelope( gui->http );

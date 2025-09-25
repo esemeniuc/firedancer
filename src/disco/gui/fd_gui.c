@@ -584,13 +584,26 @@ fd_gui_run_boot_progress( fd_gui_t * gui, long now ) {
 
   ulong snapshot_phase = snaprd_metrics[ MIDX( GAUGE, SNAPRD, STATE ) ];
 
+  /* state transitions */
+  if( FD_UNLIKELY( gui->summary.slot_caught_up!=ULONG_MAX ) ) {
+    gui->summary.boot_progress.phase = FD_GUI_BOOT_PROGRESS_TYPE_RUNNING;
+  } else if( FD_LIKELY( snapshot_phase == FD_SNAPRD_STATE_SHUTDOWN && gui->summary.slots_max_turbine[ 0 ].slot!=ULONG_MAX && gui->summary.slot_completed!=ULONG_MAX ) ) {
+    gui->summary.boot_progress.phase = FD_GUI_BOOT_PROGRESS_TYPE_CATCHING_UP;
+  } else if( FD_LIKELY( snapshot_phase==FD_SNAPRD_STATE_READING_FULL_FILE
+                     || snapshot_phase==FD_SNAPRD_STATE_FLUSHING_FULL_FILE
+                     || snapshot_phase==FD_SNAPRD_STATE_READING_FULL_HTTP
+                     || snapshot_phase==FD_SNAPRD_STATE_FLUSHING_FULL_HTTP ) ) {
+    gui->summary.boot_progress.phase = FD_GUI_BOOT_PROGRESS_TYPE_LOADING_FULL_SNAPSHOT;
+  } else if( FD_LIKELY( snapshot_phase==FD_SNAPRD_STATE_READING_INCREMENTAL_FILE
+                     || snapshot_phase==FD_SNAPRD_STATE_FLUSHING_INCREMENTAL_FILE
+                     || snapshot_phase==FD_SNAPRD_STATE_READING_INCREMENTAL_HTTP
+                     || snapshot_phase==FD_SNAPRD_STATE_FLUSHING_INCREMENTAL_HTTP ) ) {
+    gui->summary.boot_progress.phase = FD_GUI_BOOT_PROGRESS_TYPE_LOADING_INCREMENTAL_SNAPSHOT;
+  }
+
   switch ( gui->summary.boot_progress.phase ) {
     case FD_GUI_BOOT_PROGRESS_TYPE_JOINING_GOSSIP: {
       gui->summary.boot_progress.joining_gossip_time_nanos = now;
-      if( FD_UNLIKELY( snapshot_phase >= 2UL ) ) {
-        gui->summary.boot_progress.phase = FD_GUI_BOOT_PROGRESS_TYPE_LOADING_FULL_SNAPSHOT;
-        gui->summary.boot_progress.loading_snapshot[ FD_GUI_BOOT_PROGRESS_FULL_SNAPSHOT_IDX ].sample_time_nanos = now;
-      }
       break;
     }
     case FD_GUI_BOOT_PROGRESS_TYPE_LOADING_FULL_SNAPSHOT:
@@ -628,22 +641,10 @@ fd_gui_run_boot_progress( fd_gui_t * gui, long now ) {
       /* Use the latest compression ratio to estimate decompressed size */
       gui->summary.boot_progress.loading_snapshot[ snapshot_idx ].insert_accounts_current = _insert_accounts;
 
-      if( FD_UNLIKELY( snapshot_phase >= 8UL ) ) {
-        gui->summary.boot_progress.phase = FD_GUI_BOOT_PROGRESS_TYPE_LOADING_INCREMENTAL_SNAPSHOT;
-        gui->summary.boot_progress.loading_snapshot[ FD_GUI_BOOT_PROGRESS_INCREMENTAL_SNAPSHOT_IDX ].sample_time_nanos = now;
-      }
-      int slot_turbine_hist_full = gui->summary.slots_max_turbine[ FD_GUI_TURBINE_SLOT_HISTORY_SZ-1 ].slot!=ULONG_MAX;
-      if( FD_UNLIKELY( snapshot_phase == 12UL && slot_turbine_hist_full && gui->summary.slot_completed!=ULONG_MAX ) ) {
-        gui->summary.boot_progress.phase                           = FD_GUI_BOOT_PROGRESS_TYPE_CATCHING_UP;
-        gui->summary.boot_progress.catching_up_time_nanos          = now;
-      }
-
       break;
     }
     case FD_GUI_BOOT_PROGRESS_TYPE_CATCHING_UP: {
       gui->summary.boot_progress.catching_up_time_nanos          = now;
-
-      if( FD_UNLIKELY( gui->summary.slots_max_turbine[ 0 ].slot < gui->summary.slot_completed + 5L) ) gui->summary.boot_progress.phase = FD_GUI_BOOT_PROGRESS_TYPE_RUNNING;
       break;
     }
     case FD_GUI_BOOT_PROGRESS_TYPE_RUNNING: break;
@@ -1530,23 +1531,19 @@ fd_gui_handle_repair_slot( fd_gui_t * gui, ulong slot, long now ) {
 }
 
 static void
-fd_gui_handle_reset_slot( fd_gui_t * gui,
-                          ulong *    msg,
-                          long       now ) {
-  ulong last_landed_vote = msg[ 0 ];
+fd_gui_handle_reset_slot( fd_gui_t *    gui,
+                          ulong         last_landed_vote,
+                          ulong         fork_history_sz,
+                          ulong const * fork_history,
+                          long          now ) {
+  ulong _slot = fork_history[ 0UL ];
 
-  ulong parent_cnt = msg[ 1 ];
-  FD_TEST( parent_cnt<4096UL );
-
-  ulong _slot = msg[ 2 ];
-
-  for( ulong i=0UL; i<parent_cnt; i++ ) {
-    ulong parent_slot = msg[2UL+i];
+  for( ulong i=0UL; i<fork_history_sz; i++ ) {
+    ulong parent_slot = fork_history[ i ];
     fd_gui_slot_t * slot = gui->slots[ parent_slot % FD_GUI_SLOTS_CNT ];
     if( FD_UNLIKELY( slot->slot!=parent_slot ) ) {
-      ulong parent_parent_slot = ULONG_MAX;
-      if( FD_UNLIKELY( i!=parent_cnt-1UL) ) parent_parent_slot = msg[ 3UL+i ];
-      fd_gui_clear_slot( gui, parent_slot, parent_parent_slot );
+      ulong grandparent_slot = fd_ulong_if( i!=fork_history_sz-1UL, fork_history[ i+1UL ], ULONG_MAX );
+      fd_gui_clear_slot( gui, parent_slot, grandparent_slot );
     }
   }
 
@@ -1593,7 +1590,7 @@ fd_gui_handle_reset_slot( fd_gui_t * gui,
     int should_republish = slot->must_republish;
     slot->must_republish = 0;
 
-    if( FD_UNLIKELY( parent_slot!=msg[2UL+parent_slot_idx] ) ) {
+    if( FD_UNLIKELY( parent_slot!=fork_history[ parent_slot_idx ] ) ) {
       /* We are between two parents in the rooted chain, which means
          we were skipped. */
       if( FD_UNLIKELY( !slot->skipped ) ) {
@@ -1635,7 +1632,7 @@ fd_gui_handle_reset_slot( fd_gui_t * gui,
     /* We reached the last parent in the chain, everything above this
        must have already been rooted, so we can exit. */
 
-    if( FD_UNLIKELY( parent_slot_idx>=parent_cnt ) ) break;
+    if( FD_UNLIKELY( parent_slot_idx>=fork_history_sz ) ) break;
   }
 
   ulong duration_sum = 0UL;
@@ -1676,6 +1673,14 @@ fd_gui_handle_reset_slot( fd_gui_t * gui,
        turbine slot if we are leader */
     if( FD_UNLIKELY( gui->summary.slots_max_turbine[ 0 ].slot!=ULONG_MAX && gui->summary.slot_completed!=ULONG_MAX && gui->summary.slot_completed>gui->summary.slots_max_turbine[ 0 ].slot ) ) {
       fd_gui_try_insert_ephemeral_slot( gui->summary.slots_max_turbine, FD_GUI_TURBINE_SLOT_HISTORY_SZ+1, gui->summary.slot_completed, now );
+    }
+
+    int slot_turbine_hist_full = gui->summary.slots_max_turbine[ FD_GUI_TURBINE_SLOT_HISTORY_SZ-1UL ].slot!=ULONG_MAX;
+    if( FD_UNLIKELY( gui->summary.slot_caught_up==ULONG_MAX && slot_turbine_hist_full && gui->summary.slots_max_turbine[ 0 ].slot < (gui->summary.slot_completed + 3UL) ) ) {
+      gui->summary.slot_caught_up = gui->summary.slot_completed + 4UL;
+
+      fd_gui_printf_slot_caught_up( gui );
+      fd_http_server_ws_broadcast( gui->http );
     }
   }
 
@@ -1758,22 +1763,20 @@ fd_gui_handle_completed_slot( fd_gui_t * gui,
 
 static void
 fd_gui_handle_rooted_slot( fd_gui_t * gui,
-                           ulong *    msg ) {
-  ulong _slot = msg[ 0 ];
-
-  // FD_LOG_WARNING(( "Got rooted slot %lu", _slot ));
+                           ulong      root_slot ) {
+  // FD_LOG_WARNING(( "Got rooted slot %lu", root_slot ));
 
   /* Slot 0 is always rooted.  No need to iterate all the way back to
-     i==_slot */
-  for( ulong i=0UL; i<fd_ulong_min( _slot, FD_GUI_SLOTS_CNT ); i++ ) {
-    ulong parent_slot = _slot - i;
+     i==root_slot */
+  for( ulong i=0UL; i<fd_ulong_min( root_slot, FD_GUI_SLOTS_CNT ); i++ ) {
+    ulong parent_slot = root_slot - i;
     ulong parent_idx = parent_slot % FD_GUI_SLOTS_CNT;
 
     fd_gui_slot_t * slot = gui->slots[ parent_idx ];
     if( FD_UNLIKELY( slot->slot==ULONG_MAX) ) break;
 
     if( FD_UNLIKELY( slot->slot!=parent_slot ) ) {
-      FD_LOG_ERR(( "_slot %lu i %lu we expect parent_slot %lu got slot->slot %lu", _slot, i, parent_slot, slot->slot ));
+      FD_LOG_ERR(( "root_slot %lu i %lu we expect parent_slot %lu got slot->slot %lu", root_slot, i, parent_slot, slot->slot ));
     }
     if( FD_UNLIKELY( slot->level>=FD_GUI_SLOT_LEVEL_ROOTED ) ) break;
 
@@ -1782,7 +1785,7 @@ fd_gui_handle_rooted_slot( fd_gui_t * gui,
     fd_http_server_ws_broadcast( gui->http );
   }
 
-  gui->summary.slot_rooted = _slot;
+  gui->summary.slot_rooted = root_slot;
   fd_gui_printf_root_slot( gui );
   fd_http_server_ws_broadcast( gui->http );
 }
@@ -1832,14 +1835,6 @@ fd_gui_handle_optimistically_confirmed_slot( fd_gui_t * gui,
         fd_http_server_ws_broadcast( gui->http );
       }
     }
-  }
-
-  int slot_turbine_hist_full = gui->summary.slots_max_turbine[ FD_GUI_TURBINE_SLOT_HISTORY_SZ-1UL ].slot!=ULONG_MAX;
-  if( FD_UNLIKELY( gui->summary.slot_caught_up==ULONG_MAX && slot_turbine_hist_full && gui->summary.slots_max_turbine[ 0 ].slot < (_slot + 3UL) ) ) {
-    gui->summary.slot_caught_up = _slot + 4UL;
-
-    fd_gui_printf_slot_caught_up( gui );
-    fd_http_server_ws_broadcast( gui->http );
   }
 
   gui->summary.slot_optimistically_confirmed = _slot;
@@ -2069,7 +2064,7 @@ fd_gui_handle_tower_update( fd_gui_t *                   gui,
                             long                         now ) {
   (void)now;
 
-  if( FD_LIKELY( tower->root_slot!=ULONG_MAX && gui->summary.slot_rooted!=tower->root_slot ) ) {
+  if( FD_LIKELY( tower->new_root && gui->summary.slot_rooted!=tower->root_slot ) ) {
     /* Move any shred data up to and including _slot from staging array
        to history array */
     ulong start_slot = fd_ulong_if( gui->shreds.history_slot!=ULONG_MAX, gui->shreds.history_slot+1UL, tower->root_slot );
@@ -2117,6 +2112,10 @@ fd_gui_handle_tower_update( fd_gui_t *                   gui,
     fd_gui_printf_root_slot( gui );
     fd_http_server_ws_broadcast( gui->http );
   }
+
+  if( FD_LIKELY( gui->summary.slot_completed==ULONG_MAX || tower->reset_slot!=gui->summary.slot_completed ) ) {
+    fd_gui_handle_reset_slot( gui, tower->vote_slot, tower->fork_history_sz, tower->fork_history, now );
+  }
 }
 
 void
@@ -2151,7 +2150,7 @@ fd_gui_plugin_message( fd_gui_t *    gui,
 
   switch( plugin_msg ) {
     case FD_PLUGIN_MSG_SLOT_ROOTED:
-      fd_gui_handle_rooted_slot( gui, (ulong *)msg );
+      fd_gui_handle_rooted_slot( gui, ((ulong *)msg)[ 0 ] );
       break;
     case FD_PLUGIN_MSG_SLOT_OPTIMISTICALLY_CONFIRMED:
       fd_gui_handle_optimistically_confirmed_slot( gui, (ulong *)msg );
@@ -2185,7 +2184,11 @@ fd_gui_plugin_message( fd_gui_t *    gui,
       break;
     }
     case FD_PLUGIN_MSG_SLOT_RESET: {
-      fd_gui_handle_reset_slot( gui, (ulong *)msg, now );
+      ulong last_landed_vote = ((ulong *)msg)[ 0 ];
+      ulong fork_history_sz = ((ulong *)msg)[ 1 ] + 1UL;
+      ulong const * fork_history =&((ulong *)msg)[ 2 ];
+      FD_TEST( fork_history_sz <= 4097 );
+      fd_gui_handle_reset_slot( gui, last_landed_vote, fork_history_sz, fork_history, now );
       break;
     }
     case FD_PLUGIN_MSG_BALANCE: {

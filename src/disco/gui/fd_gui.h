@@ -12,6 +12,7 @@
 #include "../../discof/restore/fd_snaprd_tile.h"
 #include "../../discof/replay/fd_replay_tile.h"
 #include "../../discof/tower/fd_tower_tile.h"
+#include "../../choreo/tower/fd_tower.h"
 
 #include "../topo/fd_topo.h"
 
