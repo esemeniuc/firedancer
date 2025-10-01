@@ -641,25 +641,6 @@ fd_topo_initialize( config_t * config ) {
   FOR(exec_tile_cnt) fd_topob_tile_out( topo, "exec",      i,                               "exec_replay", i );
   FOR(exec_tile_cnt) fd_topob_tile_in(  topo, "replay",    0UL,    "metric_in", "exec_replay", i, FD_TOPOB_RELIABLE, FD_TOPOB_POLLED );
 
-  if( FD_LIKELY( config->tiles.gui.enabled ) ) {
-    fd_topob_wksp( topo, "gui" );
-
-    /**/                 fd_topob_tile(     topo, "gui",     "gui",     "metric_in",  tile_to_cpu[ topo->tile_cnt ], 0, 1 );
-
-    /*                                      topo, tile_name, tile_kind_id, fseq_wksp,   link_name,      link_kind_id, reliable,            polled */
-    FOR(net_tile_cnt)    fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "net_gossvf",   i,            FD_TOPOB_UNRELIABLE, FD_TOPOB_POLLED ); /* No reliable consumers of networking fragments, may be dropped or overrun */
-    /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "repair_net",   0UL,          FD_TOPOB_UNRELIABLE, FD_TOPOB_POLLED );
-    FOR(shred_tile_cnt)  fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "shred_out",    i,            FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
-    /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "gossip_net",   0UL,          FD_TOPOB_UNRELIABLE, FD_TOPOB_POLLED );
-    /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "gossip_out",   0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
-    /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "tower_out",    0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
-    /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "replay_out",   0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
-
-    if( FD_LIKELY( snapshots_enabled ) ) {
-                         fd_topob_tile_in ( topo, "gui",    0UL,           "metric_in", "snaprd_out",   0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
-    }
-  }
-
   if( FD_LIKELY( !is_auto_affinity ) ) {
     if( FD_UNLIKELY( affinity_tile_cnt<topo->tile_cnt ) )
       FD_LOG_ERR(( "The topology you are using has %lu tiles, but the CPU affinity specified in the config tile as [layout.affinity] only provides for %lu cores. "
@@ -707,6 +688,28 @@ fd_topo_initialize( config_t * config ) {
   FOR(bank_tile_cnt)   fd_topob_tile_uses( topo, &topo->tiles[ fd_topo_find_tile( topo, "bank",   i   ) ], banks_obj, FD_SHMEM_JOIN_MODE_READ_WRITE );
   FOR(resolv_tile_cnt) fd_topob_tile_uses( topo, &topo->tiles[ fd_topo_find_tile( topo, "resolv", i   ) ], banks_obj, FD_SHMEM_JOIN_MODE_READ_ONLY  );
   FD_TEST( fd_pod_insertf_ulong( topo->props, banks_obj->id, "banks" ) );
+
+  if( FD_LIKELY( config->tiles.gui.enabled ) ) {
+    fd_topob_wksp( topo, "gui" );
+
+    /**/                 fd_topob_tile(     topo, "gui",     "gui",     "metric_in",  tile_to_cpu[ topo->tile_cnt ], 0, 1 );
+
+    /**/                 fd_topob_tile_uses( topo, &topo->tiles[ fd_topo_find_tile( topo, "gui", 0UL ) ], banks_obj, FD_SHMEM_JOIN_MODE_READ_WRITE ); /* WRITE required to update refcnt */
+
+    /*                                      topo, tile_name, tile_kind_id, fseq_wksp,   link_name,      link_kind_id, reliable,            polled */
+    FOR(net_tile_cnt)    fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "net_gossvf",   i,            FD_TOPOB_UNRELIABLE, FD_TOPOB_POLLED ); /* No reliable consumers of networking fragments, may be dropped or overrun */
+    /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "repair_net",   0UL,          FD_TOPOB_UNRELIABLE, FD_TOPOB_POLLED );
+    FOR(shred_tile_cnt)  fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "shred_out",    i,            FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
+    /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "gossip_net",   0UL,          FD_TOPOB_UNRELIABLE, FD_TOPOB_POLLED );
+    /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "gossip_out",   0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
+    /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "tower_out",    0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
+    /**/                 fd_topob_tile_in(  topo, "gui",    0UL,           "metric_in", "replay_out",   0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
+    /**/                 fd_topob_tile_in ( topo, "gui",    0UL,           "metric_in", "replay_stake", 0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
+
+    if( FD_LIKELY( snapshots_enabled ) ) {
+                         fd_topob_tile_in ( topo, "gui",    0UL,           "metric_in", "snaprd_out",   0UL,          FD_TOPOB_RELIABLE,   FD_TOPOB_POLLED );
+    }
+  }
 
   /* TODO: This should not exist in production */
   fd_topo_obj_t * bank_hash_cmp_obj = setup_topo_bank_hash_cmp( topo, "bh_cmp" );

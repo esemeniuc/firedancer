@@ -756,26 +756,19 @@ publish_slot_completed( fd_replay_tile_t *  ctx,
   slot_info->parent_block_id       = parent_block_id;
   slot_info->bank_hash             = *bank_hash;
   slot_info->block_hash            = *block_hash;
-
   slot_info->transaction_count     = fd_bank_txn_count_get( bank );
-  slot_info->nonvote_txn_count     = fd_bank_nonvote_txn_count_get( bank );
-  slot_info->failed_txn_count      = fd_bank_failed_txn_count_get( bank );
-  slot_info->nonvote_failed_txn_count = fd_bank_nonvote_failed_txn_count_get( bank );
-  slot_info->total_compute_units_used = fd_bank_total_compute_units_used_get( bank );
-  slot_info->execution_fees        = fd_bank_execution_fees_get( bank );
-  slot_info->priority_fees         = fd_bank_priority_fees_get( bank );
-  slot_info->tips                  = 0UL; /* todo ... tip accounts balance delta */
-  slot_info->shred_count           = fd_bank_shred_cnt_get( bank );
-
-  fd_cost_tracker_t const * cost_tracker = fd_bank_cost_tracker_locking_query( bank );
-  slot_info->max_compute_units     = !!cost_tracker ? cost_tracker->block_cost_limit : ULONG_MAX;
-  fd_bank_cost_tracker_end_locking_query( bank );
 
   slot_info->first_fec_set_received_nanos      = bank->first_fec_set_received_nanos;
   slot_info->preparation_begin_nanos           = bank->preparation_begin_nanos;
   slot_info->first_transaction_scheduled_nanos = bank->first_transaction_scheduled_nanos;
   slot_info->last_transaction_finished_nanos   = bank->last_transaction_finished_nanos;
   slot_info->completion_time_nanos             = fd_log_wallclock();
+
+  /* refcnt should be incremented by 1 for each consumer that uses
+     `bank_idx`.  Each consumer should decrement the bank's refcnt once
+     they are done usin the bank. */
+  FD_ATOMIC_FETCH_AND_ADD( &bank->refcnt, 1UL ); /* gui tile */
+  slot_info->bank_idx = bank->idx;
 
   fd_stem_publish( stem, ctx->replay_out->idx, REPLAY_SIG_SLOT_COMPLETED, ctx->replay_out->chunk, sizeof(fd_replay_slot_completed_t), 0UL, 0UL, fd_frag_meta_ts_comp( fd_tickcount() ) );
   ctx->replay_out->chunk = fd_dcache_compact_next( ctx->replay_out->chunk, sizeof(fd_replay_slot_completed_t), ctx->replay_out->chunk0, ctx->replay_out->wmark );
@@ -943,7 +936,7 @@ prepare_leader_bank( fd_replay_tile_t *  ctx,
 
   /* Now that a bank has been created for the leader slot, increment the
      reference count until we are done with the leader slot. */
-  ctx->leader_bank->refcnt++;
+  FD_ATOMIC_FETCH_AND_ADD( &ctx->leader_bank->refcnt, 1UL );
 
   return ctx->leader_bank;
 }
@@ -981,7 +974,7 @@ fini_leader_bank( fd_replay_tile_t *  ctx,
   buffer_vote_towers( ctx, &xid, ctx->leader_bank );
 
   /* The reference on the bank is finally no longer needed. */
-  ctx->leader_bank->refcnt--;
+  FD_ATOMIC_FETCH_AND_SUB( &ctx->leader_bank->refcnt, 1UL );
 
   /* We are no longer leader so we can clear the bank index we use for
      being the leader. */
@@ -1021,7 +1014,7 @@ publish_root_advanced( fd_replay_tile_t *  ctx,
 
   /* Increment the reference count on the consensus root bank to account
      for the number of exec tiles that are waiting on it. */
-  bank->refcnt += ctx->resolv_tile_cnt;
+  FD_ATOMIC_FETCH_AND_ADD( &bank->refcnt, ctx->resolv_tile_cnt );
 
   fd_replay_root_advanced_t * msg = fd_chunk_to_laddr( ctx->replay_out->mem, ctx->replay_out->chunk );
   msg->bank_idx = bank->idx;
@@ -1176,7 +1169,7 @@ maybe_become_leader( fd_replay_tile_t *  ctx,
     FD_LOG_ERR(( "too many skipped ticks %lu for slot %lu, chain must halt", msg->ticks_per_slot+msg->total_skipped_ticks, ctx->next_leader_slot ));
   }
 
-  fd_stem_publish( stem, ctx->replay_out->idx, REPLAY_SIG_BECAME_LEADER, ctx->replay_out->chunk, sizeof(fd_became_leader_t), 0UL, 0UL, 0UL );
+  fd_stem_publish( stem, ctx->replay_out->idx, REPLAY_SIG_BECAME_LEADER, ctx->replay_out->chunk, sizeof(fd_became_leader_t), 0UL, 0UL, fd_frag_meta_ts_comp( fd_tickcount() ) );
   ctx->replay_out->chunk = fd_dcache_compact_next( ctx->replay_out->chunk, sizeof(fd_became_leader_t), ctx->replay_out->chunk0, ctx->replay_out->wmark );
 
   ctx->next_leader_slot = ULONG_MAX;
@@ -1455,7 +1448,7 @@ dispatch_task( fd_replay_tile_t *  ctx,
         fd_dump_block_to_protobuf_collect_tx( ctx->block_dump_ctx, txn_p );
       }
 
-      bank->refcnt++;
+      FD_ATOMIC_FETCH_AND_ADD( &bank->refcnt, 1UL );
 
       if( FD_UNLIKELY( !bank->first_transaction_scheduled_nanos ) ) bank->first_transaction_scheduled_nanos = fd_log_wallclock();
 
@@ -1472,7 +1465,7 @@ dispatch_task( fd_replay_tile_t *  ctx,
       fd_txn_p_t * txn_p = fd_sched_get_txn( ctx->sched, task->txn_sigverify->txn_idx );
 
       fd_bank_t * bank = fd_banks_bank_query( ctx->banks, task->txn_sigverify->bank_idx );
-      bank->refcnt++;
+      FD_ATOMIC_FETCH_AND_ADD( &bank->refcnt, 1UL );
 
       fd_replay_out_link_t *        exec_out = ctx->exec_out;
       fd_exec_txn_sigverify_msg_t * exec_msg = fd_chunk_to_laddr( exec_out->mem, exec_out->chunk );
@@ -1827,7 +1820,7 @@ process_exec_task_done( fd_replay_tile_t *        ctx,
   ulong exec_tile_idx = sig&0xFFFFFFFFUL;
 
   fd_bank_t * bank = fd_banks_bank_query( ctx->banks, msg->bank_idx );
-  bank->refcnt--;
+  FD_ATOMIC_FETCH_AND_SUB( &bank->refcnt, 1UL );
 
   switch( sig>>32 ) {
     case FD_EXEC_TT_TXN_EXEC: {
@@ -1991,7 +1984,7 @@ process_resolv_slot_completed( fd_replay_tile_t * ctx, ulong bank_idx ) {
   fd_bank_t * bank = fd_banks_bank_query( ctx->banks, bank_idx );
   FD_TEST( bank );
 
-  bank->refcnt--;
+  FD_ATOMIC_FETCH_AND_SUB( &bank->refcnt, 1UL );
 }
 
 static void
