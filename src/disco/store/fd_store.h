@@ -431,7 +431,6 @@ fd_store_query_const( fd_store_t const * store, fd_hash_t const * merkle_root ) 
    return NULL;
 }
 
-
 /* Operations */
 
 /* fd_store_insert inserts a new FEC set keyed by merkle.  Returns the
@@ -456,7 +455,8 @@ fd_store_query_const( fd_store_t const * store, fd_hash_t const * merkle_root ) 
 fd_store_fec_t *
 fd_store_insert( fd_store_t * store,
                  ulong        part_idx,
-                 fd_hash_t  * merkle_root );
+                 fd_hash_t  * merkle_root,
+                 fd_hash_t  * chained_merkle_root );
 
 /* fd_store_link queries for and links the child keyed by merkle_root to
    parent keyed by chained_merkle_root.  Returns a pointer to the child.

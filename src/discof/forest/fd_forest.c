@@ -749,7 +749,6 @@ fd_forest_slot_clear( fd_forest_t * forest, ulong slot ) {
           consumed_insert( forest, parent->slot, fd_forest_pool_idx( pool, parent ) );
         }
       }
-
     }
   } else {
     fd_forest_subtrees_ele_remove( subtrees, &blk->slot, NULL, pool );

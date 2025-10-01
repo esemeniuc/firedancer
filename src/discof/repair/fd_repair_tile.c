@@ -187,8 +187,12 @@ typedef struct fd_fec_sig fd_fec_sig_t;
 #define MAP_MEMOIZE 0
 #include "../../util/tmpl/fd_map_dynamic.c"
 
+/* Following map tracks slots that we have received a notice to dump and
+   repair. If it lives in the map, it means there is an equivocation
+   for this slot and we currently have the wrong / incomplete
+   replayable version of the slot. */
 struct fd_dup_confirmed {
-  ulong slot;
+  ulong     slot;
   fd_hash_t block_id;
   fd_hash_t parent_bid;
 };
@@ -234,10 +238,6 @@ struct ctx {
   fd_inflights_t * inflight;
   fd_repair_t    * protocol;
 
-  /* Map of slots that we have received a notice to dump and repair. If
-     it lives in the map, it means there is an equivocation for this
-     slot and we currently have the wrong / incomplete replayable
-     version of the slot. */
   fd_dup_confirmed_t * dup_slots;
 
   fd_pubkey_t identity_public_key;
@@ -646,11 +646,11 @@ after_sign( ctx_t             * ctx,
   }
 }
 
-/* fd_store_query_range queries range of FEC sets starting from tail_mr
-   and walks up the tree until head_mr is reached.  If there is a
-   gap, returns 0.  Otherwise returns 1. */
+/* fd_repair_fec_range_query queries store for the range of FEC sets
+   starting from tail_mr and walks up the tree until head_mr is reached.
+   If there is a gap, returns 0.  Otherwise returns 1. */
 int
-fd_store_query_range( fd_store_t * store, fd_hash_t const * tail_mr, fd_hash_t const * head_mr ) {
+fd_repair_fec_range_query( fd_store_t * store, fd_hash_t const * tail_mr, fd_hash_t const * head_mr ) {
   long shacq_start = 0; long shacq_end = 0; long shrel_end = 0;
   FD_STORE_SHARED_LOCK( store, shacq_start, shacq_end, shrel_end ) {
     fd_store_fec_t const * tail = fd_store_query_const( store, tail_mr );
@@ -670,7 +670,7 @@ after_shred( ctx_t      * ctx,
              fd_shred_t * shred,
              ulong        nonce ) {
   /* Insert the shred sig (shared by all shred members in the FEC set)
-      into the map. */
+     into the map. */
 
   int is_code = fd_shred_is_code( fd_shred_type( shred->variant ) );
   int src = fd_disco_shred_out_shred_sig_is_turbine( sig ) ? SHRED_SRC_TURBINE : SHRED_SRC_REPAIR;
@@ -708,7 +708,7 @@ after_shred( ctx_t      * ctx,
   if( FD_UNLIKELY( ele->complete_idx != UINT_MAX && ele->buffered_idx==ele->complete_idx ) ) {
     fd_dup_confirmed_t * dupl = fd_dup_confirmed_query( ctx->dup_slots, ele->slot, NULL );
     if( FD_UNLIKELY( dupl ) ) {
-      if( fd_store_query_range( ctx->store, &dupl->block_id, &dupl->parent_bid ) ) {
+      if( fd_repair_fec_range_query( ctx->store, &dupl->block_id, &dupl->parent_bid ) ) {
         FD_LOG_NOTICE(( "Duplicate confirmed slot %lu repair successful", ele->slot ));
       } else {
         /* We have received all the shreds for the slot, but they either
