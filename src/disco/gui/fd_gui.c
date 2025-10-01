@@ -217,6 +217,26 @@ fd_gui_ws_open( fd_gui_t * gui,
     FD_TEST( !fd_http_server_ws_send( gui->http, ws_conn_id ) );
   }
 
+  /* todo .. temporary workaround to skip the blur until frontend boot
+     screen lands */
+  if( FD_UNLIKELY( gui->summary.is_full_client ) ) {
+    uchar prev = gui->summary.startup_progress.phase;
+    gui->summary.startup_progress.phase = FD_GUI_START_PROGRESS_TYPE_RUNNING;
+    fd_gui_printf_startup_progress( gui );
+    FD_TEST( !fd_http_server_ws_send( gui->http, ws_conn_id ) );
+    gui->summary.startup_progress.phase = prev;
+
+    ulong added[ 1 ] = { 0 };
+    memset( gui->validator_info.info[ 0 ].pubkey->uc, (int)UINT_MAX, 32UL );
+    gui->validator_info.info[ 0 ].name[ 0 ] = '\0';
+    gui->validator_info.info[ 0 ].website[ 0 ] = '\0';
+    gui->validator_info.info[ 0 ].details[ 0 ] = '\0';
+    gui->validator_info.info[ 0 ].icon_uri[ 0 ] = '\0';
+    gui->validator_info.info_cnt = 1UL;
+    fd_gui_printf_peers_validator_info_update( gui, NULL, 0UL, NULL, 0UL, added, 1UL );
+    FD_TEST( !fd_http_server_ws_send( gui->http, ws_conn_id ) );
+  }
+
   if( FD_LIKELY( gui->block_engine.has_block_engine ) ) {
     fd_gui_printf_block_engine( gui );
     FD_TEST( !fd_http_server_ws_send( gui->http, ws_conn_id ) );
