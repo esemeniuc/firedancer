@@ -709,7 +709,7 @@ publish_slot_completed( fd_replay_tile_t *  ctx,
   slot_info->tips                  = 0UL; /* todo ... tip accounts balance delta */
   slot_info->shred_count           = fd_bank_shred_cnt_get( bank );
 
-  fd_cost_tracker_t * cost_tracker = fd_bank_cost_tracker_locking_query( bank );
+  fd_cost_tracker_t const * cost_tracker = fd_bank_cost_tracker_locking_query( bank );
   slot_info->max_compute_units     = !!cost_tracker ? cost_tracker->block_cost_limit : ULONG_MAX;
   fd_bank_cost_tracker_end_locking_query( bank );
 

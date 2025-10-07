@@ -163,6 +163,9 @@ fd_gui_new( void *                shmem,
   gui->shreds.history_tail          = 0UL;
   gui->shreds.history_slot          = ULONG_MAX;
 
+  gui->summary.catch_up_repair_sz  = 0UL;
+  gui->summary.catch_up_turbine_sz = 0UL;
+
   return gui;
 }
 
@@ -213,6 +216,7 @@ fd_gui_ws_open( fd_gui_t * gui,
     fd_gui_printf_optimistically_confirmed_slot,
     fd_gui_printf_completed_slot,
     fd_gui_printf_live_tile_timers,
+    fd_gui_printf_catch_up_history,
   };
 
   ulong printers_len = sizeof(printers) / sizeof(printers[0]);
@@ -1501,13 +1505,45 @@ fd_gui_handle_shred( fd_gui_t * gui,
                      ulong      fec_idx,
                      int        is_turbine,
                      long       tsorig ) {
-  ulong prev_max_turbine = gui->summary.slots_max_turbine[ 0 ].slot;
-
+  ulong prev_turbine = gui->summary.slots_max_turbine[ 0 ].slot;
   if( FD_LIKELY( is_turbine ) ) fd_gui_try_insert_ephemeral_slot( gui->summary.slots_max_turbine, FD_GUI_TURBINE_SLOT_HISTORY_SZ+1UL, slot, tsorig );
+  ulong new_turbine = gui->summary.slots_max_turbine[ 0 ].slot;
 
-  if( FD_UNLIKELY( gui->summary.slots_max_turbine[ 0 ].slot!=ULONG_MAX && gui->summary.slots_max_turbine[ 0 ].slot!=prev_max_turbine ) ) {
+  if( FD_UNLIKELY( new_turbine!=ULONG_MAX && new_turbine!=prev_turbine ) ) {
     fd_gui_printf_turbine_slot( gui );
     fd_http_server_ws_broadcast( gui->http );
+
+    if( FD_UNLIKELY( gui->summary.slot_caught_up==ULONG_MAX ) ) {
+      int inserted = 0;
+      for( ulong i=0UL; i<gui->summary.catch_up_turbine_sz; i++ ) {
+        if( FD_UNLIKELY( i%2UL==1UL && gui->summary.catch_up_turbine[ i ]==new_turbine-1UL ) ) {
+          gui->summary.catch_up_turbine[ i ]++;
+          inserted = 1;
+          break;
+        } else if( FD_UNLIKELY( i%2UL==0UL && gui->summary.catch_up_turbine[ i ]==new_turbine+1UL ) ) {
+          gui->summary.catch_up_turbine[ i ]--;
+          inserted = 1;
+          break;
+        }
+      }
+      if( FD_LIKELY( !inserted ) ) {
+        gui->summary.catch_up_turbine[ gui->summary.catch_up_turbine_sz++ ] = new_turbine;
+        gui->summary.catch_up_turbine[ gui->summary.catch_up_turbine_sz++ ] = new_turbine;
+      }
+
+      /* colesce intervals that touch */
+      ulong removed = 0UL;
+      for( ulong i=1UL; i<gui->summary.catch_up_turbine_sz-1UL; i+=2 ) {
+        if( FD_UNLIKELY( gui->summary.catch_up_turbine[ i ]==gui->summary.catch_up_turbine[ i+1UL ] ) ) {
+          gui->summary.catch_up_turbine[ i ]     = ULONG_MAX;
+          gui->summary.catch_up_turbine[ i+1UL ] = ULONG_MAX;
+          removed += 2;
+        }
+      }
+
+      fd_sort_up_ulong_insert( gui->summary.catch_up_turbine, gui->summary.catch_up_turbine_sz );
+      gui->summary.catch_up_turbine_sz -= removed;
+    }
   }
 
   fd_gui_slot_staged_shred_event_t * recv_event = &gui->shreds.staged[ gui->shreds.staged_tail++ ];
@@ -1520,13 +1556,45 @@ fd_gui_handle_shred( fd_gui_t * gui,
 
 void
 fd_gui_handle_repair_slot( fd_gui_t * gui, ulong slot, long now ) {
-  ulong prev_max_repair = gui->summary.slots_max_repair[ 0 ].slot;
-
+  ulong prev_repair = gui->summary.slots_max_repair[ 0 ].slot;
   fd_gui_try_insert_ephemeral_slot( gui->summary.slots_max_repair, FD_GUI_REPAIR_SLOT_HISTORY_SZ+1UL, slot, now );
+  ulong new_repair = gui->summary.slots_max_repair[ 0 ].slot;
 
-  if( FD_UNLIKELY( gui->summary.slots_max_repair[ 0 ].slot!=ULONG_MAX && gui->summary.slots_max_repair[ 0 ].slot!=prev_max_repair ) ) {
+  if( FD_UNLIKELY( new_repair!=ULONG_MAX && new_repair!=prev_repair ) ) {
     fd_gui_printf_repair_slot( gui );
     fd_http_server_ws_broadcast( gui->http );
+
+    if( FD_UNLIKELY( gui->summary.slot_caught_up==ULONG_MAX ) ) {
+      int inserted = 0;
+      for( ulong i=0UL; i<gui->summary.catch_up_repair_sz; i++ ) {
+        if( FD_UNLIKELY( i%2UL==1UL && gui->summary.catch_up_repair[ i ]==new_repair-1UL ) ) {
+          gui->summary.catch_up_repair[ i ]++;
+          inserted = 1;
+          break;
+        } else if( FD_UNLIKELY( i%2UL==0UL && gui->summary.catch_up_repair[ i ]==new_repair+1UL ) ) {
+          gui->summary.catch_up_repair[ i ]--;
+          inserted = 1;
+          break;
+        }
+      }
+      if( FD_LIKELY( !inserted ) ) {
+        gui->summary.catch_up_repair[ gui->summary.catch_up_repair_sz++ ] = new_repair;
+        gui->summary.catch_up_repair[ gui->summary.catch_up_repair_sz++ ] = new_repair;
+      }
+
+      /* colesce intervals that touch */
+      ulong removed = 0UL;
+      for( ulong i=1UL; i<gui->summary.catch_up_repair_sz-1UL; i+=2 ) {
+        if( FD_UNLIKELY( gui->summary.catch_up_repair[ i ]==gui->summary.catch_up_repair[ i+1UL ] ) ) {
+          gui->summary.catch_up_repair[ i ]     = ULONG_MAX;
+          gui->summary.catch_up_repair[ i+1UL ] = ULONG_MAX;
+          removed += 2;
+        }
+      }
+
+      fd_sort_up_ulong_insert( gui->summary.catch_up_repair, gui->summary.catch_up_repair_sz );
+      gui->summary.catch_up_repair_sz -= removed;
+    }
   }
 }
 

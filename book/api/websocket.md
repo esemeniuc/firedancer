@@ -318,6 +318,26 @@ errors.
 NOTE: this message is only supported on the Firedancer client, the
 Frankendancer client will always publish `null` for this message
 
+#### `summary.catch_up_history`
+| frequency | type             | example   |
+|-----------|------------------|-----------|
+| *Once*    | `CatchUpHistory` | see below |
+
+::: details Example
+
+```json
+{
+	"topic": "summary",
+	"key": "catch_up_history",
+	"value": {
+        "repair": [11, 12, 13, ...],
+        "turbine": [21, 22, 23, ...]
+	}
+}
+```
+
+:::
+
 #### `summary.startup_time_nanos`
 | frequency | type     | example             |
 |-----------|----------|---------------------|

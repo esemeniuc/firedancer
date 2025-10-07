@@ -571,6 +571,14 @@ struct fd_gui {
     fd_gui_tile_timers_t tile_timers_leader_history[ FD_GUI_TILE_TIMER_LEADER_CNT ][ FD_GUI_TILE_TIMER_LEADER_DOWNSAMPLE_CNT ][ FD_GUI_TILE_TIMER_TILE_CNT ];
     ulong                tile_timers_leader_history_slot_sample_cnt[ FD_GUI_TILE_TIMER_LEADER_CNT ];
     ulong                tile_timers_leader_history_slot[ FD_GUI_TILE_TIMER_LEADER_CNT ];
+
+    /* catchup_* is run-length encoded. i.e. adjacent pairs represent
+       contiguous runs */
+    ulong catch_up_turbine[ 4096 ];
+    ulong catch_up_turbine_sz;
+
+    ulong catch_up_repair[ 4096 ];
+    ulong catch_up_repair_sz;
   } summary;
 
   fd_gui_slot_t slots[ FD_GUI_SLOTS_CNT ][ 1 ];

@@ -34,7 +34,7 @@ void fd_gui_printf_optimistically_confirmed_slot( fd_gui_t * gui );
 void fd_gui_printf_completed_slot( fd_gui_t * gui );
 void fd_gui_printf_estimated_tps( fd_gui_t * gui );
 void fd_gui_printf_shred_updates( fd_gui_t * gui );
-
+void fd_gui_printf_catch_up_history( fd_gui_t * gui );
 void
 fd_gui_printf_null_query_response( fd_http_server_t * http,
                                    char const *       topic,

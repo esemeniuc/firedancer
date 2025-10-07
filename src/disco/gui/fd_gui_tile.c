@@ -304,11 +304,11 @@ after_frag( fd_gui_ctx_t *      ctx,
         fd_repair_msg_t const * msg = (fd_repair_msg_t const *)payload;
         long tsorig_ns = ctx->ref_wallclock + (long)((double)(fd_frag_meta_ts_decomp( tsorig, fd_tickcount() ) - ctx->ref_tickcount) / fd_tempo_tick_per_ns( NULL ));
         switch ( msg->kind ) {
-          case FD_REPAIR_KIND_PING:
-          case FD_REPAIR_KIND_PONG:
+          case FD_REPAIR_KIND_PING: break;
+          case FD_REPAIR_KIND_PONG: break;
           case FD_REPAIR_KIND_ORPHAN: break;
-          case FD_REPAIR_KIND_SHRED: fd_gui_handle_repair_slot( ctx->gui, msg->shred.slot, tsorig_ns ); break;
-          case FD_REPAIR_KIND_HIGHEST_SHRED: fd_gui_handle_repair_slot( ctx->gui, msg->highest_shred.slot, tsorig_ns ); break;
+          case FD_REPAIR_KIND_SHRED: { if( msg->shred.slot==0UL ) { break; } fd_gui_handle_repair_slot( ctx->gui, msg->shred.slot, tsorig_ns ); break; }
+          case FD_REPAIR_KIND_HIGHEST_SHRED: { if( msg->highest_shred.slot==0UL ) { break; } fd_gui_handle_repair_slot( ctx->gui, msg->highest_shred.slot, tsorig_ns ); break; }
           default: FD_LOG_ERR(( "unexpected repair msg kind %u", msg->kind ));
         }
       }
