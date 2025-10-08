@@ -107,7 +107,7 @@
    leaders with adjacent rotations.  If this happens, Solana has bigger
    problems. */
 #define FD_GUI_TURBINE_SLOT_HISTORY_SZ ( 12UL )
-#define FD_GUI_REPAIR_SLOT_HISTORY_SZ  ( 12UL )
+#define FD_GUI_REPAIR_SLOT_HISTORY_SZ  ( 36UL )
 
 #define FD_GUI_TXN_FLAGS_STARTED         ( 1U)
 #define FD_GUI_TXN_FLAGS_ENDED           ( 2U)
@@ -550,6 +550,8 @@ struct fd_gui {
     ulong slot_optimistically_confirmed;
     ulong slot_completed;
     ulong slot_caught_up;
+    ulong slot_repair;
+    ulong slot_turbine;
 
     fd_gui_ephemeral_slot_t slots_max_turbine[ FD_GUI_TURBINE_SLOT_HISTORY_SZ+1UL ];
     fd_gui_ephemeral_slot_t slots_max_repair [ FD_GUI_REPAIR_SLOT_HISTORY_SZ +1UL ];

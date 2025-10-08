@@ -126,6 +126,8 @@ fd_gui_new( void *                shmem,
   gui->summary.slot_optimistically_confirmed = ULONG_MAX;
   gui->summary.slot_completed                = ULONG_MAX;
   gui->summary.slot_caught_up                = ULONG_MAX;
+  gui->summary.slot_repair                   = ULONG_MAX;
+  gui->summary.slot_turbine                  = ULONG_MAX;
 
   for( ulong i=0UL; i < (FD_GUI_TURBINE_SLOT_HISTORY_SZ+1UL); i++ ) gui->summary.slots_max_repair[ i ].slot = ULONG_MAX;
   for( ulong i=0UL; i < (FD_GUI_TURBINE_SLOT_HISTORY_SZ+1UL); i++ ) gui->summary.slots_max_turbine[ i ].slot = ULONG_MAX;
@@ -1477,8 +1479,9 @@ fd_gui_handle_slot_end( fd_gui_t * gui,
 }
 
 static inline void
-fd_gui_try_insert_ephemeral_slot( fd_gui_ephemeral_slot_t * slots, ulong insert_sz, ulong slot, long now ) {
-  for( ulong i=0UL; i<FD_GUI_TURBINE_SLOT_HISTORY_SZ; i++ ) {
+fd_gui_try_insert_ephemeral_slot( fd_gui_ephemeral_slot_t * slots, ulong slots_sz, ulong slot, long now ) {
+  int already_present = 0;
+  for( ulong i=0UL; i<slots_sz+1UL; i++ ) {
     /* evict any slots older than 4.8 seconds */
     if( FD_UNLIKELY( slots[ i ].slot!=ULONG_MAX && now-slots[ i ].timestamp_arrival_nanos>4800000000L ) ) {
       slots[ i ].slot = ULONG_MAX;
@@ -1488,14 +1491,16 @@ fd_gui_try_insert_ephemeral_slot( fd_gui_ephemeral_slot_t * slots, ulong insert_
     /* if we've already seen this slot, just update the timestamp */
     if( FD_UNLIKELY( slots[ i ].slot==slot ) ) {
       slots[ i ].timestamp_arrival_nanos = now;
-      return;
+      already_present = 1;
     }
   }
 
+  if( FD_UNLIKELY( already_present ) ) return;
+
   /* Insert the new slot number, evicting a smaller slot if necessary */
-  slots[ FD_GUI_TURBINE_SLOT_HISTORY_SZ ].timestamp_arrival_nanos = now;
-  slots[ FD_GUI_TURBINE_SLOT_HISTORY_SZ ].slot = slot;
-  fd_gui_ephemeral_slot_sort_insert( slots, insert_sz );
+  slots[ slots_sz ].timestamp_arrival_nanos = now;
+  slots[ slots_sz ].slot = slot;
+  fd_gui_ephemeral_slot_sort_insert( slots, slots_sz+1UL );
 }
 
 void
@@ -1505,11 +1510,23 @@ fd_gui_handle_shred( fd_gui_t * gui,
                      ulong      fec_idx,
                      int        is_turbine,
                      long       tsorig ) {
-  ulong prev_turbine = gui->summary.slots_max_turbine[ 0 ].slot;
-  if( FD_LIKELY( is_turbine ) ) fd_gui_try_insert_ephemeral_slot( gui->summary.slots_max_turbine, FD_GUI_TURBINE_SLOT_HISTORY_SZ+1UL, slot, tsorig );
-  ulong new_turbine = gui->summary.slots_max_turbine[ 0 ].slot;
+  // ulong prev_turbine = gui->summary.slots_max_turbine[ 0 ].slot;
+  // ulong new_turbine = gui->summary.slots_max_turbine[ 0 ].slot;
+  int was_sent = 0;
+  for( ulong i=0UL; i<FD_GUI_TURBINE_SLOT_HISTORY_SZ; i++ ) {
+    if( FD_UNLIKELY( gui->summary.slots_max_turbine[ i ].slot==ULONG_MAX ) ) break;
+    if( FD_UNLIKELY( gui->summary.slots_max_turbine[ i ].slot==slot ) ) {
+      was_sent = 1;
+      break;
+    }
+  }
+  if( FD_LIKELY( is_turbine ) ) fd_gui_try_insert_ephemeral_slot( gui->summary.slots_max_turbine, FD_GUI_TURBINE_SLOT_HISTORY_SZ, slot, tsorig );
+  ulong new_turbine = slot;
 
-  if( FD_UNLIKELY( new_turbine!=ULONG_MAX && new_turbine!=prev_turbine ) ) {
+  // if( FD_UNLIKELY( new_turbine!=ULONG_MAX && new_turbine!=prev_turbine ) ) {
+  if( FD_UNLIKELY( !was_sent && is_turbine && new_turbine!=gui->summary.slot_turbine ) ) {
+    gui->summary.slot_turbine = new_turbine;
+
     fd_gui_printf_turbine_slot( gui );
     fd_http_server_ws_broadcast( gui->http );
 
@@ -1556,11 +1573,24 @@ fd_gui_handle_shred( fd_gui_t * gui,
 
 void
 fd_gui_handle_repair_slot( fd_gui_t * gui, ulong slot, long now ) {
-  ulong prev_repair = gui->summary.slots_max_repair[ 0 ].slot;
-  fd_gui_try_insert_ephemeral_slot( gui->summary.slots_max_repair, FD_GUI_REPAIR_SLOT_HISTORY_SZ+1UL, slot, now );
-  ulong new_repair = gui->summary.slots_max_repair[ 0 ].slot;
+  (void) now;
+  // ulong prev_repair = gui->summary.slots_max_repair[ 0 ].slot;
+  // ulong new_repair = gui->summary.slots_max_repair[ 0 ].slot;
+  int was_sent = 0;
+  for( ulong i=0UL; i<FD_GUI_REPAIR_SLOT_HISTORY_SZ; i++ ) {
+    if( FD_UNLIKELY( gui->summary.slots_max_repair[ i ].slot==ULONG_MAX ) ) break;
+    if( FD_UNLIKELY( gui->summary.slots_max_repair[ i ].slot==slot ) ) {
+      was_sent = 1;
+      break;
+    }
+  }
+  fd_gui_try_insert_ephemeral_slot( gui->summary.slots_max_repair, FD_GUI_REPAIR_SLOT_HISTORY_SZ, slot, now );
+  ulong new_repair = slot;
 
-  if( FD_UNLIKELY( new_repair!=ULONG_MAX && new_repair!=prev_repair ) ) {
+  // if( FD_UNLIKELY( new_repair!=ULONG_MAX && new_repair!=prev_repair ) ) {
+  if( FD_UNLIKELY( !was_sent && new_repair!=gui->summary.slot_repair ) ) {
+    gui->summary.slot_repair = new_repair;
+
     fd_gui_printf_repair_slot( gui );
     fd_http_server_ws_broadcast( gui->http );
 
@@ -1740,7 +1770,7 @@ fd_gui_handle_reset_slot( fd_gui_t *    gui,
     /* Also update slot_turbine which could be larger than the max
        turbine slot if we are leader */
     if( FD_UNLIKELY( gui->summary.slots_max_turbine[ 0 ].slot!=ULONG_MAX && gui->summary.slot_completed!=ULONG_MAX && gui->summary.slot_completed>gui->summary.slots_max_turbine[ 0 ].slot ) ) {
-      fd_gui_try_insert_ephemeral_slot( gui->summary.slots_max_turbine, FD_GUI_TURBINE_SLOT_HISTORY_SZ+1, gui->summary.slot_completed, now );
+      fd_gui_try_insert_ephemeral_slot( gui->summary.slots_max_turbine, FD_GUI_TURBINE_SLOT_HISTORY_SZ, gui->summary.slot_completed, now );
     }
 
     int slot_turbine_hist_full = gui->summary.slots_max_turbine[ FD_GUI_TURBINE_SLOT_HISTORY_SZ-1UL ].slot!=ULONG_MAX;
