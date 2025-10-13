@@ -153,6 +153,8 @@ test_snp_app_send_recv_udp( fd_wksp_t * wksp ) {
   client_cb_test->out_packet = client_packet;
   client->apps_cnt = 1;
   client->apps[0].port = client_port;
+  client->flow_cred_total = 1L;
+  client->flow_cred_alloc = 1L;
   FD_TEST( fd_snp_init( client ) );
 
   client_app->cb.rx = test_cb_app_rx;
@@ -179,6 +181,8 @@ test_snp_app_send_recv_udp( fd_wksp_t * wksp ) {
   server_cb_test->out_packet = server_packet;
   server->apps_cnt = 1;
   server->apps[0].port = server_port;
+  server->flow_cred_total = 1L;
+  server->flow_cred_alloc = 1L;
   FD_TEST( fd_snp_init( server ) );
 
   server_app->cb.rx = test_cb_app_rx;
@@ -268,6 +272,8 @@ test_snp_app_send_recv_v1( fd_wksp_t * wksp ) {
   client_cb_test->snp = client;
   client->apps_cnt = 1;
   client->apps[0].port = client_port;
+  // client->flow_cred_total = 0; /* testing auto-initialization */
+  // client->flow_cred_alloc = 0; /* testing auto-initialization */
   FD_TEST( fd_snp_init( client ) );
 
   client_app->cb.rx = test_cb_app_rx;
@@ -298,6 +304,8 @@ test_snp_app_send_recv_v1( fd_wksp_t * wksp ) {
   server_cb_test->snp = server;
   server->apps_cnt = 1;
   server->apps[0].port = server_port;
+  // server->flow_cred_total = 0; /* testing auto-initialization */
+  // server->flow_cred_alloc = 0; /* testing auto-initialization */
   FD_TEST( fd_snp_init( server ) );
 
   server_app->cb.rx = test_cb_app_rx;
@@ -515,6 +523,8 @@ test_snp_app_send_recv_v1_detailed( fd_wksp_t * wksp ) {
   client_cb_test->snp_app = client_app;
   client->apps_cnt = 1;
   client->apps[0].port = client_port;
+  // client->flow_cred_total = 0; /* testing auto-initialization */
+  // client->flow_cred_alloc = 0; /* testing auto-initialization */
   FD_TEST( fd_snp_init( client ) );
 
   client_app->cb.rx = test_cb_app_rx_detailed;
@@ -545,6 +555,8 @@ test_snp_app_send_recv_v1_detailed( fd_wksp_t * wksp ) {
   server_cb_test->snp_app = server_app;
   server->apps_cnt = 1;
   server->apps[0].port = server_port;
+  // server->flow_cred_total = 0; /* testing auto-initialization */
+  // server->flow_cred_alloc = 0; /* testing auto-initialization */
   FD_TEST( fd_snp_init( server ) );
 
   server_app->cb.rx = test_cb_app_rx_detailed;

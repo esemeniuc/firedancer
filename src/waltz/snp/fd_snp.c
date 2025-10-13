@@ -1,11 +1,24 @@
 #include "fd_snp.h"
 #include "fd_snp_common.h"
 #include "fd_snp_private.h"
+#include "fd_snp_proto.h"
 
 ulong
 fd_snp_footprint( fd_snp_limits_t const * limits ) {
   fd_snp_layout_t layout;
   return fd_snp_footprint_ext( limits, &layout );
+}
+
+static inline int
+fd_snp_conn_map_lg_slot_cnt_from_peer_cnt( ulong peer_cnt ) {
+  /* 2 insertions per connection (+1) and map should have twice the capacity (+1) */
+  return 2 + fd_ulong_find_msb( peer_cnt );
+}
+
+static inline int
+fd_snp_dest_meta_map_lg_slot_cnt_from_peer_cnt( ulong peer_cnt ) {
+  /* map should have twice the capacity (+1) */
+  return 1 + fd_ulong_find_msb( peer_cnt );
 }
 
 ulong
@@ -14,9 +27,7 @@ fd_snp_footprint_ext( fd_snp_limits_t const * limits,
   memset( layout, 0, sizeof(fd_snp_layout_t) );
   if( FD_UNLIKELY( !limits ) ) return 0UL;
 
-  ulong  peer_cnt         = limits->peer_cnt;
-
-  if( FD_UNLIKELY( peer_cnt       ==0UL ) ) { FD_LOG_WARNING(( "invalid peer_cnt==0" )); return 0UL; }
+  if( FD_UNLIKELY( limits->peer_cnt ==0UL ) ) { FD_LOG_WARNING(( "invalid limits->peer_cnt==0" )); return 0UL; }
 
   layout->meta_sz = sizeof(fd_snp_layout_t);
 
@@ -33,7 +44,7 @@ fd_snp_footprint_ext( fd_snp_limits_t const * limits,
   /* allocate space for conn IDs */
   offs                      = fd_ulong_align_up( offs, fd_snp_conn_map_align() );
   layout->conn_map_off      = offs;
-  ulong conn_map_footprint  = fd_snp_conn_map_footprint( 2 + fd_ulong_find_msb( limits->peer_cnt ) ); /* 2 insertions per connection (+1) and map should have twice the capacity (+1) */
+  ulong conn_map_footprint  = fd_snp_conn_map_footprint( fd_snp_conn_map_lg_slot_cnt_from_peer_cnt( limits->peer_cnt ) );
   if( FD_UNLIKELY( !conn_map_footprint  ) ) { FD_LOG_WARNING(( "invalid fd_snp_conn_map_footprint" )); return 0UL; }
   offs                     += conn_map_footprint;
 
@@ -54,13 +65,13 @@ fd_snp_footprint_ext( fd_snp_limits_t const * limits,
   /* allocate space for dest_meta maps (a,b) */
   offs                            = fd_ulong_align_up( offs, fd_snp_dest_meta_map_align() );
   layout->dest_meta_map_off_a     = offs;
-  ulong dest_meta_map_footprint_a = fd_snp_dest_meta_map_footprint( 1 + fd_ulong_find_msb( limits->peer_cnt ) ); /* map should have twice the capacity (+1) */
+  ulong dest_meta_map_footprint_a = fd_snp_dest_meta_map_footprint( fd_snp_dest_meta_map_lg_slot_cnt_from_peer_cnt( limits->peer_cnt ) );
   if( FD_UNLIKELY( !dest_meta_map_footprint_a ) ) { FD_LOG_WARNING(( "invalid fd_snp_dest_meta_map_footprint a" )); return 0UL; }
   offs                         += dest_meta_map_footprint_a;
 
   offs                            = fd_ulong_align_up( offs, fd_snp_dest_meta_map_align() );
   layout->dest_meta_map_off_b     = offs;
-  ulong dest_meta_map_footprint_b = fd_snp_dest_meta_map_footprint( 1 + fd_ulong_find_msb( limits->peer_cnt ) );  /* map should have twice the capacity (+1) */
+  ulong dest_meta_map_footprint_b = fd_snp_dest_meta_map_footprint( fd_snp_dest_meta_map_lg_slot_cnt_from_peer_cnt( limits->peer_cnt ) );
   if( FD_UNLIKELY( !dest_meta_map_footprint_b ) ) { FD_LOG_WARNING(( "invalid fd_snp_dest_meta_map_footprint b" )); return 0UL; }
   offs                         += dest_meta_map_footprint_b;
 
@@ -167,7 +178,7 @@ fd_snp_init( fd_snp_t * snp ) {
 
   /* Initialize conn_map */
   uchar * conn_map_laddr = (uchar *)snp + layout.conn_map_off;
-  snp->conn_map = fd_snp_conn_map_join( fd_snp_conn_map_new( (void *)conn_map_laddr, 2 + fd_ulong_find_msb( limits->peer_cnt ) ) );  /* 2 insertions per connection (+1) and map should have twice the capacity (+1) */
+  snp->conn_map = fd_snp_conn_map_join( fd_snp_conn_map_new( (void *)conn_map_laddr, fd_snp_conn_map_lg_slot_cnt_from_peer_cnt( limits->peer_cnt ) ) );
   if( FD_UNLIKELY( !snp->conn_map ) ) {
     FD_LOG_WARNING(( "NULL conn_map" ));
     return NULL;
@@ -197,19 +208,25 @@ fd_snp_init( fd_snp_t * snp ) {
   fd_aes_set_decrypt_key( random_aes_key, 128, snp->config._state_dec_key );
 
   /* Initialize flow control credits pool (to zero). */
-  snp->flow_cred_total = 0L; /* must be set externally. */
+  if( FD_UNLIKELY( !snp->flow_cred_total ) ) { /* must be set externally. */
+    snp->flow_cred_total = 1L;
+    FD_LOG_WARNING(( "snp flow_cred_total uninitialized setting to %ld", snp->flow_cred_total ));
+  }
   snp->flow_cred_taken = 0L;
-  snp->flow_cred_alloc = 0L; /* must be set externally. */
+  if( FD_UNLIKELY( !snp->flow_cred_alloc ) ) { /* must be set externally. */
+    snp->flow_cred_alloc = 1L;
+    FD_LOG_WARNING(( "snp flow_cred_alloc uninitialized setting to %ld", snp->flow_cred_alloc ));
+  }
 
   /* Initialize dest_meta_map */
   uchar * dest_meta_map_laddr_a = (uchar *)snp + layout.dest_meta_map_off_a;
-  snp->dest_meta_map_a = fd_snp_dest_meta_map_join( fd_snp_dest_meta_map_new( (void *)dest_meta_map_laddr_a, 1 + fd_ulong_find_msb( limits->peer_cnt ) ) ); /* map should have twice the capacity (+1) */
+  snp->dest_meta_map_a = fd_snp_dest_meta_map_join( fd_snp_dest_meta_map_new( (void *)dest_meta_map_laddr_a, fd_snp_dest_meta_map_lg_slot_cnt_from_peer_cnt( limits->peer_cnt ) ) );
   if( FD_UNLIKELY( !snp->dest_meta_map_a ) ) {
     FD_LOG_WARNING(( "NULL dest_meta_map_a" ));
     return NULL;
   }
   uchar * dest_meta_map_laddr_b = (uchar *)snp + layout.dest_meta_map_off_b;
-  snp->dest_meta_map_b = fd_snp_dest_meta_map_join( fd_snp_dest_meta_map_new( (void *)dest_meta_map_laddr_b, 1 + fd_ulong_find_msb( limits->peer_cnt ) ) ); /* map should have twice the capacity (+1) */
+  snp->dest_meta_map_b = fd_snp_dest_meta_map_join( fd_snp_dest_meta_map_new( (void *)dest_meta_map_laddr_b, fd_snp_dest_meta_map_lg_slot_cnt_from_peer_cnt( limits->peer_cnt ) ) );
   if( FD_UNLIKELY( !snp->dest_meta_map_b ) ) {
     FD_LOG_WARNING(( "NULL dest_meta_map_b" ));
     return NULL;
@@ -240,24 +257,33 @@ fd_snp_conn_create( fd_snp_t * snp,
   ulong session_id = 0UL;
   int i = 0;
 
-  /* check if there are enough flow credits available. */
-  if( FD_UNLIKELY( ( snp->flow_cred_total - snp->flow_cred_taken ) < snp->flow_cred_alloc ) ) {
-    FD_DEBUG_SNP( FD_LOG_WARNING(( "[snp-conn] insufficient flow credits for new connection total %ld taken %ld alloc %ld", snp->flow_cred_total, snp->flow_cred_taken, snp->flow_cred_alloc )) );
+  /* get a new conn from pool */
+  if( FD_UNLIKELY( !fd_snp_conn_pool_free( snp->conn_pool ) ) ) {
+    FD_LOG_WARNING(( "unable to find space in connection pool" ));
+    return NULL;
+  }
+  fd_snp_conn_t * conn = fd_snp_conn_pool_ele_acquire( snp->conn_pool );
+  if( FD_UNLIKELY( conn==NULL ) ) {
+    FD_LOG_WARNING(( "unable to acquire element from connection pool" ));
     return NULL;
   }
 
-  /* get a new conn from pool */
-  fd_snp_conn_t * conn = fd_snp_conn_pool_ele_acquire( snp->conn_pool );
-  if( FD_UNLIKELY( conn==NULL ) ) {
-    /* fd_snp_conn_pool_ele_acquire failed */
-    return NULL; /* nothing was acquired */
-  }
-
   /* get a new last_pkt from pool */
+  if( FD_UNLIKELY( !fd_snp_pkt_pool_free( snp->last_pkt_pool ) ) ) {
+    FD_LOG_WARNING(( "unable to find space in packet pool" ));
+    return NULL;
+  }
   fd_snp_pkt_t * last_pkt = fd_snp_pkt_pool_ele_acquire( snp->last_pkt_pool );
   if( FD_UNLIKELY( last_pkt==NULL ) ) {
-    /* fd_snp_pkt_pool_ele_acquire failed */
+    FD_LOG_WARNING(( "unable to acquire element from packet pool" ));
     goto err;
+  }
+
+  /* insert conn in map by peer_addr. ignore failure.
+     if this fails, there's already a conn for peer_addr. */
+  entry = fd_snp_conn_map_insert( snp->conn_map, peer_addr );
+  if( FD_LIKELY( entry ) ) {
+    entry->val = conn;
   }
 
   /* insert conn in map by session_id. do NOT ignore failure.
@@ -273,14 +299,7 @@ fd_snp_conn_create( fd_snp_t * snp,
     /* fd_snp_conn_map_insert(..., sessio_id) failed n times */
     goto err;
   }
-  FD_LOG_WARNING(( "fd_snp_conn_create is_server=%u session_id=%016lx", is_server, session_id ));
-
-  /* insert conn in map by peer_addr. ignore failure.
-     if this fails, there's already a conn for peer_addr. */
-  entry = fd_snp_conn_map_insert( snp->conn_map, peer_addr );
-  if( FD_LIKELY( entry ) ) {
-    entry->val = conn;
-  }
+  FD_LOG_NOTICE(( "fd_snp_conn_create is_server=%u session_id=%016lx", is_server, session_id ));
 
   /* init conn */
   conn->peer_addr = peer_addr;
@@ -301,12 +320,15 @@ fd_snp_conn_create( fd_snp_t * snp,
 
   conn->is_multicast = 0;
 
+  conn->last_sent_ts = fd_snp_timestamp_ms();
+
   /* init last_pkt */
   last_pkt->data_sz = 0;
 
   return conn;
 
 err:
+  FD_LOG_WARNING(( "fd_snp_conn_create failed!" ));
   if( last_pkt ) {
     fd_snp_pkt_pool_ele_release( snp->last_pkt_pool, last_pkt );
   }
@@ -580,12 +602,15 @@ fd_snp_send_ping( fd_snp_t *      snp,
   return fd_snp_finalize_snp_and_invoke_tx_cb( snp, conn, packet, packet_sz, meta | FD_SNP_META_OPT_BUFFERED );
 }
 
-static inline void
+static inline int
 fd_snp_pkt_pool_store( fd_snp_t *            snp,
                        fd_snp_conn_t const * conn,
                        uchar const *         packet,
                        ulong                 packet_sz,
                        uchar                 send ) {
+  if( FD_UNLIKELY( !fd_snp_pkt_pool_free( snp->pkt_pool ) ) ) {
+    return -1;
+  }
   fd_snp_pkt_t * pkt = fd_snp_pkt_pool_ele_acquire( snp->pkt_pool );
   if( FD_LIKELY( pkt ) ) {
     pkt->session_id = conn->session_id;
@@ -593,6 +618,7 @@ fd_snp_pkt_pool_store( fd_snp_t *            snp,
     pkt->data_sz = (ushort)packet_sz;
     pkt->send = send;
   }
+  return 0;
 }
 
 static inline void
@@ -648,6 +674,7 @@ fd_snp_send_flow_rx_wmark_packet( fd_snp_t *      snp,
 static inline void
 fd_snp_dest_meta_map_update_on_handshake( fd_snp_t *      snp,
                                           fd_snp_conn_t * conn ) {
+  FD_TEST( snp );
   uint   ip4_addr = 0;
   ushort udp_port = 0;
   fd_snp_peer_addr_into_parts( &ip4_addr, &udp_port, conn->peer_addr );
@@ -734,7 +761,10 @@ fd_snp_send( fd_snp_t *    snp,
   /* 6. If packet_sz > 0, cache current packet */
   if( packet_sz>0 ) {
     FD_DEBUG_SNP( FD_LOG_NOTICE(( "[snp-send] cache packet" )) );
-    fd_snp_pkt_pool_store( snp, conn, packet, packet_sz, /* send */ 1 );
+    if( FD_UNLIKELY( fd_snp_pkt_pool_store( snp, conn, packet, packet_sz, /* send */ 1 ) < 0 ) ) {
+      FD_LOG_WARNING(( "unable to cache packet in pool due to insufficient space" ));
+      return -1;
+    }
   }
 
   /* 7. If we did have a connection, return */
@@ -829,11 +859,6 @@ fd_snp_process_packet( fd_snp_t * snp,
   if( FD_LIKELY( type==FD_SNP_TYPE_PAYLOAD ) ) {
     /* R1. If multicast, accept */
     if( FD_UNLIKELY( fd_snp_ip_is_multicast( packet ) ) ) {
-      {
-        static ulong cnt_rx_m;
-        if( cnt_rx_m%1000==0 ) FD_LOG_NOTICE(( "[snp] received multicast packet_sz=%lu", packet_sz ));
-        cnt_rx_m++;
-      }
       return snp->cb.rx( snp->cb.ctx, packet, packet_sz, meta );
     }
 
@@ -869,7 +894,10 @@ fd_snp_process_packet( fd_snp_t * snp,
 
     /* R4. state==4 or 5, cache packet */
     if( FD_LIKELY( conn->state==FD_SNP_TYPE_HS_SERVER_FINI || conn->state==FD_SNP_TYPE_HS_CLIENT_FINI ) ) {
-      fd_snp_pkt_pool_store( snp, conn, packet, packet_sz, /* recv */ 0 );
+      if( FD_UNLIKELY( fd_snp_pkt_pool_store( snp, conn, packet, packet_sz, /* recv */ 0 ) < 0 ) ) {
+        FD_LOG_WARNING(( "unable to cache packet in pool" ));
+        return -1;
+      };
       return 0;
     }
 
@@ -1101,7 +1129,7 @@ fd_snp_housekeeping( fd_snp_t * snp ) {
          watermark updates.  Note that conn->flow_rx_alloc should be
          at least larger than the amount of bytes considered for the
          margin update and the bytes reserved beyond the next watermark
-         (see below).  For the current setup, > ( 3 * FD_SNP_MTU ). */
+         (see below). */
       if( FD_UNLIKELY( ( conn->flow_rx_wmark  - conn->flow_rx_level ) < ( conn->flow_rx_alloc / 2 ) ) ) {
         /* The next watermark value must take into account any unused
            credits (in which case it references the the current level)

@@ -26,4 +26,7 @@ $(call run-unit-test,test_snp_app)
 $(call make-unit-test,test_snp_common,test_snp_common,$(SNP_TEST_LIBS))
 $(call run-unit-test,test_snp_common)
 
+$(call make-unit-test,test_snp_limits,test_snp_limits,$(SNP_TEST_LIBS))
+$(call run-unit-test,test_snp_limits)
+
 endif

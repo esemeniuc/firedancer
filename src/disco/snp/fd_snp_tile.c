@@ -152,6 +152,15 @@ during_housekeeping( fd_snp_tile_ctx_t * ctx ) {
 
   /* SNP housekeeping */
   fd_snp_housekeeping( ctx->snp );
+
+  /* SNP logged metrics.  TODO improve! */
+  static long snp_next_metrics_log = 0L;
+  long now = fd_snp_timestamp_ms();
+  if( now > snp_next_metrics_log ) {
+    ulong used = fd_snp_conn_pool_used( ctx->snp->conn_pool );
+    FD_LOG_NOTICE(( "[SNP] contacts=%lu connections=%lu", ctx->new_dest_cnt, used ));
+    snp_next_metrics_log = now + 10000L; /* Every 10 seconds. */
+  }
 }
 
 static inline void
@@ -574,24 +583,12 @@ unprivileged_init( fd_topo_t *      topo,
   snp->apps_cnt = 1;
   snp->apps[0].port = 8003;
   snp->apps[0].multicast_ip = (uint)((239 << 24) + (0 << 16) + (192 << 8) + 18);
+  /* Flow control initialization.  The allocation per connection is
+     arbitrary at the moment. */
+  snp->flow_cred_alloc = (long)( 4 * 1024 * 1024 ); /* 4MiB */
+
   FD_TEST( fd_snp_init( snp ) );
   fd_memcpy( snp->config.identity, ctx->identity_key, sizeof(fd_pubkey_t) );
-
-  /* Flow control initialization */
-  snp->flow_cred_total = LONG_MAX;
-  for( ulong i=0UL; i<tile->in_cnt; i++ ) {
-    fd_topo_link_t const * link = &topo->links[ tile->in_link_id[ i ] ];
-    if( FD_LIKELY( !strcmp( link->name, "net_shred"  ) ) ) {
-      FD_LOG_NOTICE(( "[snp] link->depth %lu link->mtu %lu", link->depth, link->mtu ));
-      FD_TEST( link->mtu == FD_NET_MTU );
-      snp->flow_cred_total = fd_long_min( snp->flow_cred_total, (long)( link->depth * link->mtu ) );
-    }
-  }
-  FD_TEST( snp->flow_cred_total < LONG_MAX );
-  /* Arbitraty flow credits allocation: 16*(32+32 shreds and 4 extra) pkts. */
-  snp->flow_cred_alloc = (long)( 16*(32+32+4)*FD_SNP_MTU );
-  long snp_max_connections = snp->flow_cred_total / snp->flow_cred_alloc;
-  FD_LOG_NOTICE(( "[snp] flow_cred_total %ld flow_cred_alloc %ld max connections %ld", snp->flow_cred_total, snp->flow_cred_alloc, snp_max_connections ));
 
   ctx->keyswitch = fd_keyswitch_join( fd_topo_obj_laddr( topo, tile->keyswitch_obj_id ) );
   FD_TEST( ctx->keyswitch );
