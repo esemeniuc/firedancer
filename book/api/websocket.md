@@ -1050,7 +1050,7 @@ The server maintains a table called the "Peer Table" with per-peer
 Gossip connection metrics. This table is large and updates frequently.
 Instead of sending a new copy of the table to every client periodically,
 the node maintains a viewport of a sorted instance of the Peer Table.
-The `gossip.query_scroll`, `gossip.query_sort_col`,
+The `gossip.query_scroll`, `gossip.query_sort`,
 `gossip.peers_size_update`, and `gossip.view_update` allow the client to
 synchronize with and update their viewport.
 
@@ -1064,20 +1064,8 @@ increases the visual impact of their ordering.
 - row_cnt: the number of rows in the viewport
 
 The server imposes a limit of a maximum of 200 rows per viewport. When a
-client first connects, the server assigns them the following default
-viewport. This viewport can be incrementally changed by sending the
-update messages below.
-
-start_row: 0
-row_cnt: 0
-sort_key:
-
-- ("Ingress Push", desc)
-- ("Ingress Pull", desc)
-- ("Egress Push", desc)
-- ("Egress Pull", desc)
-- ("Pubkey", desc)
-- ("IP Addr", desc)
+client first connects, the server assigns them a default viewport state,
+which is specified below.
 
 #### `gossip.network_stats`
 | frequency       | type                 | example     |
@@ -1200,6 +1188,11 @@ request includes the bounds for the updated view, which lets the server
 respond with the view's data. If the requested rows are outside the
 bounds of the table, only the active rows are included in the response.
 
+When a client first connects, before a `query_scroll` request has been
+made, their viewport state will be initialized with `start_row=0` and
+`row_cnt=0` (i.e. an empty viewport), meaning they will get no updates
+until their viewport grows to a non-zero size.
+
 Note that the default client view is an empty viewport, meaning no
 updates will be published to the client until after the first
 `query_scroll` received by the server.
@@ -1247,6 +1240,7 @@ The tabular data in the clients view, as a 2D dictionary. The dictionary is keye
 | col_name | `string` | The name of the column to apply the sort on |
 | dir      | `string` | The direction to sort `col_name`.  One of 'asc', 'desc', or null.  null will restore the column to its default precedence by completely removing it from the client sort key |
 
+THIS ENDPOINT IS DEPRECATED.
 The server maintains a copy of each client's sort key, and this message
 updates the client's stored sort key.  The provided column is moved to
 the front of the sort key and its direction is set to the provided
@@ -1277,6 +1271,74 @@ view.
         "10": {"IP Address": "192.168.0.1", "col2": 2},
         "11": {"IP Address": "192.168.0.2", "col2": 4},
         "12": {"IP Address": "192.168.0.3", "col2": 6}
+    }
+}
+```
+
+:::
+
+#### `gossip.query_sort`
+| frequency | type             | example     |
+|-----------|------------------|-------------|
+| *Request* | `GossipViewData` | below       |
+
+| param | type       | description |
+|-------|------------|-------------|
+| col   | `string[]` | `col[ i ]` is the name of the column with the `i`th sort precedence in the reqeusted view |
+| dir   | `number[]` | `dir[ i ]` is sort direction `col[ i ]` in the requested view |
+
+The server maintains a copy of each client's active sort key. This
+message allows clients to change their sort key which will in change the
+ordering of their view. Since updating the sort key changes the client's
+view completely, the response will be a fresh copy of all the data in
+the client's new view.
+
+When a client first connects, the start with the following sort key by
+default, until an update is made.
+
+- ("Ingress Push", desc)
+- ("Ingress Pull", desc)
+- ("Egress Push", desc)
+- ("Egress Pull", desc)
+- ("Pubkey", desc)
+- ("IP Addr", desc)
+
+The provided sort key is a list of column names and a corresponding list
+of column directions. Directions are provided as signed integers with
+the following meanings:
+
+- ascending: 1
+- descending: -1
+- no sort / ignore: 0
+
+All columns in the table must be present in the provided sort key. If
+the column doesn't affect the ordering of the view, it should have a
+direction of `0`. Not that the relative ordering of columns with
+`dir==0` can be arbitrary as it does not change the view ordering.
+
+::: details Example
+
+```json
+{
+    "topic": "gossip",
+    "key": "query_sort",
+    "id": 32,
+    "params": {
+        "col": ["IP Addr", "Pubkey", "Egress Pull", "Egress Push", "Ingress Pull", "Ingress Push"],
+        "dir": [1, 0, 0, 0, 0, 0],
+    }
+}
+```
+
+```json
+{
+    "topic": "gossip",
+    "key": "query_sort",
+    "id": 32,
+    "value": {
+        "10": {"IP Address": "192.168.0.1", ...},
+        "11": {"IP Address": "192.168.0.2", ...},
+        "12": {"IP Address": "192.168.0.3", ...}
     }
 }
 ```

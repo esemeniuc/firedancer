@@ -619,7 +619,15 @@ fd_gui_run_boot_progress( fd_gui_t * gui, long now ) {
                      || snapshot_phase==FD_SNAPRD_STATE_FLUSHING_INCREMENTAL_FILE
                      || snapshot_phase==FD_SNAPRD_STATE_READING_INCREMENTAL_HTTP
                      || snapshot_phase==FD_SNAPRD_STATE_FLUSHING_INCREMENTAL_HTTP ) ) {
-    gui->summary.boot_progress.phase = FD_GUI_BOOT_PROGRESS_TYPE_LOADING_FULL_SNAPSHOT;
+    gui->summary.boot_progress.phase = FD_GUI_BOOT_PROGRESS_TYPE_LOADING_INCREMENTAL_SNAPSHOT;
+  }
+
+  /* It's possible for the incremental snapshot phase to be skipped, or
+     complete before we can sample it.  This ensures we always get at
+     least one pass of the metrics. */
+  if( FD_UNLIKELY( gui->summary.boot_progress.phase==FD_GUI_BOOT_PROGRESS_TYPE_CATCHING_UP
+                && gui->summary.boot_progress.loading_snapshot[ FD_GUI_BOOT_PROGRESS_INCREMENTAL_SNAPSHOT_IDX ].reset_cnt==ULONG_MAX ) ) {
+    gui->summary.boot_progress.phase = FD_GUI_BOOT_PROGRESS_TYPE_LOADING_INCREMENTAL_SNAPSHOT;
   }
 
   switch ( gui->summary.boot_progress.phase ) {
