@@ -314,10 +314,9 @@ fd_runtime_fuzz_block_ctx_create( fd_solfuzz_runner_t *                runner,
   FD_TEST( rent );
   fd_bank_rent_set( bank, *rent );
 
-  fd_bank_epoch_set( bank, fd_slot_to_epoch( epoch_schedule, slot, NULL ) );
-
-  /* Refresh the program cache */
-  fd_runtime_fuzz_refresh_program_cache( bank, funk, xid, test_ctx->acct_states, test_ctx->acct_states_count, runner->spad );
+  /* Current epoch gets updated in process_new_epoch, so use the epoch
+     from the parent slot */
+  fd_bank_epoch_set( bank, fd_slot_to_epoch( epoch_schedule, parent_slot, NULL ) );
 
   /* Update vote cache for epoch T-1 */
   vote_states_prev = fd_bank_vote_states_prev_locking_modify( bank );
