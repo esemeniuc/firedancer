@@ -505,9 +505,9 @@ fd_hash_epoch_leaders( fd_solfuzz_runner_t *      runner,
 
   /* Gather all pubkeys from sched[] (skip invalid) */
   ulong uniq_cnt = 0UL;
-  for( ulong i = 0UL; i < leaders->sched_cnt; i++ ) {
+  for( ulong i = 0UL; i<leaders->sched_cnt; i++ ) {
     uint idx = leaders->sched[i];
-    if( idx >= leaders->pub_cnt ) continue;
+    if( idx>=leaders->pub_cnt ) continue;
     uniq[uniq_cnt++] = leaders->pub[idx];
   }
 
@@ -522,8 +522,9 @@ fd_hash_epoch_leaders( fd_solfuzz_runner_t *      runner,
   /* Dedupe adjacent entries in-place (sorted) */
   ulong dedup_cnt = 0UL;
   for( ulong i=0UL; i<uniq_cnt; i++ ) {
-    if( dedup_cnt == 0 ||
-        memcmp( uniq + dedup_cnt - 1, uniq + i, sizeof(fd_pubkey_t) ) != 0 ) {
+    if( dedup_cnt==0UL
+        || memcmp( uniq + dedup_cnt - 1, uniq + i, sizeof(fd_pubkey_t) )!=0 )
+    {
       uniq[dedup_cnt++] = uniq[i];
     }
   }
@@ -534,9 +535,9 @@ fd_hash_epoch_leaders( fd_solfuzz_runner_t *      runner,
   memcpy( out, &h1, sizeof(ulong) );
 
   /* Map leader schedule into uniq[] indices */
-  for( ulong i = 0UL; i < leaders->sched_cnt; i++ ) {
+  for( ulong i = 0UL; i<leaders->sched_cnt; i++ ) {
     uint idx = leaders->sched[i];
-    if( idx >= leaders->pub_cnt ) sched_mapped[i] = 0U;
+    if( idx>=leaders->pub_cnt ) sched_mapped[i] = 0U;
     else {
       fd_pubkey_t const *pk = &leaders->pub[idx];
       sched_mapped[i] = fd_pubkey_index_in_sorted_uniq( uniq, uniq_cnt, pk );
@@ -558,7 +559,7 @@ fd_runtime_fuzz_build_leader_schedule_effects( fd_solfuzz_runner_t *          ru
   /* Epoch T (bank epoch) and its slot bounds, consistent with Agave */
   fd_epoch_schedule_t es_;
   fd_epoch_schedule_t *sched = fd_sysvar_epoch_schedule_read( runner->funk, xid, &es_ );
-  FD_TEST(sched != NULL);
+  FD_TEST( sched!=NULL );
 
   ulong slot          = fd_bank_slot_get( runner->bank );
   ulong effects_epoch = fd_slot_to_leader_schedule_epoch( sched, slot );
@@ -568,7 +569,7 @@ fd_runtime_fuzz_build_leader_schedule_effects( fd_solfuzz_runner_t *          ru
   /* Check if bank has leader schedule for the correct epoch */
   fd_epoch_leaders_t const * existing_leaders
       = fd_bank_epoch_leaders_locking_query( runner->bank );
-  if( existing_leaders == NULL ) {
+  if( existing_leaders==NULL ) {
     /* No leader schedule for this epoch, zero out effects and return early */
     effects->has_leader_schedule = 0;
     effects->leader_schedule.leaders_epoch = 0UL;
@@ -589,17 +590,17 @@ fd_runtime_fuzz_build_leader_schedule_effects( fd_solfuzz_runner_t *          ru
   fd_vote_states_t const *vs = fd_bank_vote_states_locking_query( runner->bank );
   ulong vote_acc_cnt = fd_vote_states_cnt( vs );
   fd_vote_stake_weight_t *weights =
-    fd_spad_alloc(runner->spad, alignof(fd_vote_stake_weight_t),
-                  vote_acc_cnt * sizeof(fd_vote_stake_weight_t));
+    fd_spad_alloc( runner->spad, alignof(fd_vote_stake_weight_t),
+                   vote_acc_cnt * sizeof(fd_vote_stake_weight_t) );
   ulong weight_cnt = fd_stake_weights_by_node( vs, weights );
   fd_bank_vote_states_end_locking_query( runner->bank );
 
   /* Allocate an ephemeral leaders object; DO NOT install into bank */
   ulong fp = fd_epoch_leaders_footprint( weight_cnt, effects_cnt );
-  FD_TEST(fp != 0UL);
-  void *mem = fd_spad_alloc(runner->spad, fd_epoch_leaders_align(), fp);
+  FD_TEST( fp!=0UL );
+  void *mem = fd_spad_alloc( runner->spad, fd_epoch_leaders_align(), fp );
 
-  ulong vote_keyed = ( ulong )fd_runtime_should_use_vote_keyed_leader_schedule( runner->bank );
+  ulong vote_keyed = (ulong)fd_runtime_should_use_vote_keyed_leader_schedule( runner->bank );
   fd_epoch_leaders_t *effects_leaders = fd_epoch_leaders_join(fd_epoch_leaders_new(
     mem,
     effects_epoch,
@@ -610,7 +611,7 @@ fd_runtime_fuzz_build_leader_schedule_effects( fd_solfuzz_runner_t *          ru
     0UL,       /* excluded_stake */
     vote_keyed /* identity vs. vote keyed */
   ));
-  FD_TEST(effects_leaders != NULL);
+  FD_TEST( effects_leaders!=NULL );
 
   /* Fill effects to match Agave semantics */
   effects->has_leader_schedule = 1;
@@ -625,10 +626,10 @@ fd_runtime_fuzz_build_leader_schedule_effects( fd_solfuzz_runner_t *          ru
   /* leader_pub_cnt = unique leaders that actually appear in the schedule */
   effects->leader_schedule.leader_pub_cnt
     = fd_hash_epoch_leaders(
-      runner,
-      effects_leaders,
-      LEADER_SCHEDULE_HASH_SEED,
-      effects->leader_schedule.leader_schedule_hash);
+        runner,
+        effects_leaders,
+        LEADER_SCHEDULE_HASH_SEED,
+        effects->leader_schedule.leader_schedule_hash );
 }
 
 ulong
