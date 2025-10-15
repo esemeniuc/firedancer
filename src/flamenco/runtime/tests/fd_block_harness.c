@@ -476,14 +476,6 @@ fd_pubkey_cmp( void const * a, void const * b ) {
   return memcmp( a, b, sizeof(fd_pubkey_t) );
 }
 
-static inline uint
-fd_pubkey_index_in_sorted_uniq( fd_pubkey_t const * uniq,
-                                ulong               uniq_cnt,
-                                fd_pubkey_t const * pk ) {
-  void const * found = bsearch( pk, uniq, uniq_cnt, sizeof(fd_pubkey_t), fd_pubkey_cmp );
-  return found ? (uint)( (fd_pubkey_t const *)found - uniq ) : 0U;
-}
-
 /* Canonical (Agave-aligned) schedule hash
    Unique pubkeys referenced by sched, sorted deterministically
    Per-rotation indices mapped into sorted-uniq array */
@@ -492,57 +484,68 @@ fd_hash_epoch_leaders( fd_solfuzz_runner_t *      runner,
                        fd_epoch_leaders_t const * leaders,
                        ulong                      seed,
                        uchar                      out[16] ) {
+  typedef struct {
+    fd_pubkey_t pk;
+    ulong       sched_pos; /* track original position in sched[] */
+  } pk_with_pos_t;
 
   /* Single contiguou spad allocation for uniq[] and sched_mapped[] */
   void *buf = fd_spad_alloc(
-                  runner->spad,
-                  alignof(fd_pubkey_t),
-                  leaders->pub_cnt * sizeof(fd_pubkey_t) +
-                  leaders->sched_cnt * sizeof(uint) );
+    runner->spad,
+    alignof(pk_with_pos_t),
+    leaders->sched_cnt * sizeof(pk_with_pos_t) +
+    leaders->sched_cnt * sizeof(uint) );
 
-  fd_pubkey_t *uniq         = (fd_pubkey_t *)buf;
-  uint        *sched_mapped = (uint *)( uniq + leaders->pub_cnt );
+  pk_with_pos_t * tmp          = (pk_with_pos_t *)buf;
+  uint          * sched_mapped = (uint *)( tmp + leaders->sched_cnt );
 
-  /* Gather all pubkeys from sched[] (skip invalid) */
-  ulong uniq_cnt = 0UL;
+  /* Gather all pubkeys and original positions from sched[] (skip invalid) */
+  ulong gather_cnt = 0UL;
   for( ulong i = 0UL; i<leaders->sched_cnt; i++ ) {
     uint idx = leaders->sched[i];
-    if( idx>=leaders->pub_cnt ) continue;
-    uniq[uniq_cnt++] = leaders->pub[idx];
+    if( idx>=leaders->pub_cnt ) { /* invalid slot leader */
+      sched_mapped[i] = 0U;       /* prefill invalid mapping */
+      continue;
+    }
+    tmp[gather_cnt].pk        = leaders->pub[idx];
+    tmp[gather_cnt].sched_pos = i;
+    gather_cnt++;
   }
 
-  if( uniq_cnt==0UL ) {
-    memset( out, 0, sizeof(ulong) * 2 ); /* no leaders to hash */
+  if( gather_cnt==0UL ) {
+    /* No leaders => hash:=0, count:=0 */
+    fd_memset( out, 0, sizeof(ulong)*2 );
     return 0UL;
   }
 
-  /* Sort pubkeys once */
-  qsort( uniq, uniq_cnt, sizeof(fd_pubkey_t), fd_pubkey_cmp );
+  /* Sort tmp[] by pubkey */
+  qsort( tmp, gather_cnt, sizeof(pk_with_pos_t),
+         (int(*)( void const*, void const* ))fd_pubkey_cmp );
 
-  /* Dedupe adjacent entries in-place (sorted) */
-  ulong dedup_cnt = 0UL;
-  for( ulong i=0UL; i<uniq_cnt; i++ ) {
-    if( dedup_cnt==0UL
-        || memcmp( uniq + dedup_cnt - 1, uniq + i, sizeof(fd_pubkey_t) )!=0 )
-    {
-      uniq[dedup_cnt++] = uniq[i];
+  /* Dedupe and assign indices into sched_mapped[] during single pass */
+  ulong uniq_cnt = 0UL;
+  for( ulong i = 0UL; i < gather_cnt; i++ ) {
+    if( i==0UL || memcmp( &tmp[i].pk, &tmp[i-1].pk, sizeof(fd_pubkey_t) )!=0 )
+      uniq_cnt++;
+    /* uniq_cnt-1 is index in uniq set */
+    sched_mapped[tmp[i].sched_pos] = (uint)(uniq_cnt-1);
+  }
+
+  /* Reconstruct contiguous uniq[] for hashing */
+  fd_pubkey_t *uniq = fd_spad_alloc( runner->spad,
+                                     alignof(fd_pubkey_t),
+                                     uniq_cnt*sizeof(fd_pubkey_t) );
+  {
+    ulong write_pos = 0UL;
+    for( ulong i=0UL; i<gather_cnt; i++ ) {
+      if( i==0UL || memcmp( &tmp[i].pk, &tmp[i-1].pk, sizeof(fd_pubkey_t) )!=0 )
+        uniq[write_pos++] = tmp[i].pk;
     }
   }
-  uniq_cnt = dedup_cnt;
 
   /* Hash sorted unique pubkeys */
   ulong h1 = fd_hash( seed, uniq, uniq_cnt * sizeof(fd_pubkey_t) );
   memcpy( out, &h1, sizeof(ulong) );
-
-  /* Map leader schedule into uniq[] indices */
-  for( ulong i = 0UL; i<leaders->sched_cnt; i++ ) {
-    uint idx = leaders->sched[i];
-    if( idx>=leaders->pub_cnt ) sched_mapped[i] = 0U;
-    else {
-      fd_pubkey_t const *pk = &leaders->pub[idx];
-      sched_mapped[i] = fd_pubkey_index_in_sorted_uniq( uniq, uniq_cnt, pk );
-    }
-  }
 
   /* Hash mapped indices */
   ulong h2 = fd_hash( seed, sched_mapped, leaders->sched_cnt * sizeof(uint) );
