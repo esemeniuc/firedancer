@@ -481,7 +481,7 @@ fd_pubkey_index_in_sorted_uniq( fd_pubkey_t const * uniq,
                                 ulong               uniq_cnt,
                                 fd_pubkey_t const * pk ) {
   void const * found = bsearch( pk, uniq, uniq_cnt, sizeof(fd_pubkey_t), fd_pubkey_cmp );
-  return found ? (uint)((fd_pubkey_t const *)found - uniq) : 0U;
+  return found ? (uint)( (fd_pubkey_t const *)found - uniq ) : 0U;
 }
 
 /* Canonical (Agave-aligned) schedule hash
@@ -501,7 +501,7 @@ fd_hash_epoch_leaders( fd_solfuzz_runner_t *      runner,
                   leaders->sched_cnt * sizeof(uint) );
 
   fd_pubkey_t *uniq         = (fd_pubkey_t *)buf;
-  uint        *sched_mapped = (uint *)(uniq + leaders->pub_cnt);
+  uint        *sched_mapped = (uint *)( uniq + leaders->pub_cnt );
 
   /* Gather all pubkeys from sched[] (skip invalid) */
   ulong uniq_cnt = 0UL;
@@ -557,17 +557,17 @@ fd_runtime_fuzz_build_leader_schedule_effects( fd_solfuzz_runner_t *      runner
                                                fd_exec_test_block_effects_t * effects ) {
   /* Epoch T (bank epoch) and its slot bounds, consistent with Agave */
   fd_epoch_schedule_t es_;
-  fd_epoch_schedule_t *sched = fd_sysvar_epoch_schedule_read(runner->funk, xid, &es_);
+  fd_epoch_schedule_t *sched = fd_sysvar_epoch_schedule_read( runner->funk, xid, &es_ );
   FD_TEST(sched != NULL);
 
-  ulong slot          = fd_bank_slot_get(runner->bank);
-  ulong effects_epoch = fd_slot_to_leader_schedule_epoch(sched, slot);
-  ulong effects_slot0 = fd_epoch_slot0(sched, effects_epoch);
-  ulong effects_cnt   = fd_epoch_slot_cnt(sched, effects_epoch);
+  ulong slot          = fd_bank_slot_get( runner->bank );
+  ulong effects_epoch = fd_slot_to_leader_schedule_epoch( sched, slot );
+  ulong effects_slot0 = fd_epoch_slot0( sched, effects_epoch );
+  ulong effects_cnt   = fd_epoch_slot_cnt( sched, effects_epoch );
 
   /* Check if bank has leader schedule for the correct epoch */
   fd_epoch_leaders_t const * existing_leaders
-      = fd_bank_epoch_leaders_locking_query(runner->bank);
+      = fd_bank_epoch_leaders_locking_query( runner->bank );
   if( existing_leaders == NULL ) {
     /* No leader schedule for this epoch, zero out effects and return early */
     effects->has_leader_schedule = 0;
@@ -576,30 +576,30 @@ fd_runtime_fuzz_build_leader_schedule_effects( fd_solfuzz_runner_t *      runner
     effects->leader_schedule.leaders_slot_cnt = 0UL;
     effects->leader_schedule.leader_pub_cnt = 0UL;
     effects->leader_schedule.leaders_sched_cnt = 0UL;
-    fd_memset(effects->leader_schedule.leader_schedule_hash,
-              0,
-              sizeof(effects->leader_schedule.leader_schedule_hash));
+    fd_memset( effects->leader_schedule.leader_schedule_hash,
+               0,
+               sizeof(effects->leader_schedule.leader_schedule_hash) );
 
-    fd_bank_epoch_leaders_end_locking_query(runner->bank);
+    fd_bank_epoch_leaders_end_locking_query( runner->bank );
     return;
   }
-  fd_bank_epoch_leaders_end_locking_query(runner->bank);
+  fd_bank_epoch_leaders_end_locking_query( runner->bank );
 
   /* Build weights for effects (use T = current vote cache for Agave parity) */
-  fd_vote_states_t const *vs = fd_bank_vote_states_locking_query(runner->bank);
-  ulong vote_acc_cnt = fd_vote_states_cnt(vs);
+  fd_vote_states_t const *vs = fd_bank_vote_states_locking_query( runner->bank );
+  ulong vote_acc_cnt = fd_vote_states_cnt( vs );
   fd_vote_stake_weight_t *weights =
     fd_spad_alloc(runner->spad, alignof(fd_vote_stake_weight_t),
                   vote_acc_cnt * sizeof(fd_vote_stake_weight_t));
-  ulong weight_cnt = fd_stake_weights_by_node(vs, weights);
-  fd_bank_vote_states_end_locking_query(runner->bank);
+  ulong weight_cnt = fd_stake_weights_by_node( vs, weights );
+  fd_bank_vote_states_end_locking_query( runner->bank );
 
   /* Allocate an ephemeral leaders object; DO NOT install into bank */
-  ulong fp = fd_epoch_leaders_footprint(weight_cnt, effects_cnt);
+  ulong fp = fd_epoch_leaders_footprint( weight_cnt, effects_cnt );
   FD_TEST(fp != 0UL);
   void *mem = fd_spad_alloc(runner->spad, fd_epoch_leaders_align(), fp);
 
-  ulong vote_keyed = (ulong)fd_runtime_should_use_vote_keyed_leader_schedule(runner->bank);
+  ulong vote_keyed = ( ulong )fd_runtime_should_use_vote_keyed_leader_schedule( runner->bank );
   fd_epoch_leaders_t *effects_leaders = fd_epoch_leaders_join(fd_epoch_leaders_new(
     mem,
     effects_epoch,
@@ -656,11 +656,11 @@ fd_solfuzz_block_run( fd_solfuzz_runner_t * runner,
 
     /* Start saving block exec results */
     FD_SCRATCH_ALLOC_INIT( l, output_buf );
-    ulong output_end = (ulong)output_buf + output_bufsz;
+    ulong output_end = ( ulong )output_buf + output_bufsz;
 
     fd_exec_test_block_effects_t * effects =
     FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_exec_test_block_effects_t),
-                                  sizeof (fd_exec_test_block_effects_t) );
+                                sizeof( fd_exec_test_block_effects_t ) );
     if( FD_UNLIKELY( _l > output_end ) ) {
       abort();
     }
@@ -679,7 +679,7 @@ fd_solfuzz_block_run( fd_solfuzz_runner_t * runner,
     /* Capture cost tracker */
     fd_cost_tracker_t const * cost_tracker = fd_bank_cost_tracker_locking_query( runner->bank );
     effects->has_cost_tracker = 1;
-    effects->cost_tracker = (fd_exec_test_cost_tracker_t) {
+    effects->cost_tracker = ( fd_exec_test_cost_tracker_t ) {
       .block_cost = cost_tracker ? cost_tracker->block_cost : 0UL,
       .vote_cost  = cost_tracker ? cost_tracker->vote_cost  : 0UL,
     };
@@ -692,6 +692,6 @@ fd_solfuzz_block_run( fd_solfuzz_runner_t * runner,
     fd_runtime_fuzz_block_ctx_destroy( runner );
 
     *output = effects;
-    return actual_end - (ulong)output_buf;
+    return actual_end - ( ulong )output_buf;
   } FD_SPAD_FRAME_END;
 }
