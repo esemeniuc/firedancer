@@ -511,7 +511,7 @@ fd_hash_epoch_leaders( fd_solfuzz_runner_t *      runner,
     uniq[uniq_cnt++] = leaders->pub[idx];
   }
 
-  if( uniq_cnt == 0UL ) {
+  if( uniq_cnt==0UL ) {
     memset( out, 0, sizeof(ulong) * 2 ); /* no leaders to hash */
     return 0UL;
   }
