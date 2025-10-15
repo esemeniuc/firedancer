@@ -552,8 +552,8 @@ fd_hash_epoch_leaders( fd_solfuzz_runner_t *      runner,
 
 /* Helper method to build leader schedule effects for the block execution results */
 static void
-fd_runtime_fuzz_build_leader_schedule_effects( fd_solfuzz_runner_t *      runner,
-                                               fd_funk_txn_xid_t const *  xid,
+fd_runtime_fuzz_build_leader_schedule_effects( fd_solfuzz_runner_t *          runner,
+                                               fd_funk_txn_xid_t const *      xid,
                                                fd_exec_test_block_effects_t * effects ) {
   /* Epoch T (bank epoch) and its slot bounds, consistent with Agave */
   fd_epoch_schedule_t es_;
