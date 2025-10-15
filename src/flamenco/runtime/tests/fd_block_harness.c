@@ -15,6 +15,18 @@
 #include "../../../disco/pack/fd_pack.h"
 #include "generated/block.pb.h"
 
+/* Templatized leader schedule sort helper functions */
+typedef struct {
+  fd_pubkey_t pk;
+  ulong       sched_pos; /* track original position in sched[] */
+} pk_with_pos_t;
+
+#define SORT_NAME        sort_pkpos
+#define SORT_KEY_T       pk_with_pos_t
+#define SORT_BEFORE(a,b) (memcmp(&(a).pk, &(b).pk, sizeof(fd_pubkey_t))<0)
+#include "../../../util/tmpl/fd_sort.c"  /* generates templatized sort_pkpos_*() APIs */
+
+/* Fixed leader schedule hash seed (consistent with solfuzz-agave) */
 #define LEADER_SCHEDULE_HASH_SEED 0xDEADFACEUL
 
 /* Stripped down version of `fd_refresh_vote_accounts()` that simply refreshes the stake delegation amount
@@ -471,11 +483,6 @@ fd_runtime_fuzz_block_ctx_exec( fd_solfuzz_runner_t *     runner,
   return res;
 }
 
-static int
-fd_pubkey_cmp( void const * a, void const * b ) {
-  return memcmp( a, b, sizeof(fd_pubkey_t) );
-}
-
 /* Canonical (Agave-aligned) schedule hash
    Unique pubkeys referenced by sched, sorted deterministically
    Per-rotation indices mapped into sorted-uniq array */
@@ -484,11 +491,6 @@ fd_hash_epoch_leaders( fd_solfuzz_runner_t *      runner,
                        fd_epoch_leaders_t const * leaders,
                        ulong                      seed,
                        uchar                      out[16] ) {
-  typedef struct {
-    fd_pubkey_t pk;
-    ulong       sched_pos; /* track original position in sched[] */
-  } pk_with_pos_t;
-
   /* Single contiguous spad allocation for uniq[] and sched_mapped[] */
   void *buf = fd_spad_alloc(
     runner->spad,
@@ -501,7 +503,7 @@ fd_hash_epoch_leaders( fd_solfuzz_runner_t *      runner,
 
   /* Gather all pubkeys and original positions from sched[] (skip invalid) */
   ulong gather_cnt = 0UL;
-  for( ulong i = 0UL; i<leaders->sched_cnt; i++ ) {
+  for( ulong i=0UL; i<leaders->sched_cnt; i++ ) {
     uint idx = leaders->sched[i];
     if( idx>=leaders->pub_cnt ) { /* invalid slot leader */
       sched_mapped[i] = 0U;       /* prefill invalid mapping */
@@ -519,12 +521,11 @@ fd_hash_epoch_leaders( fd_solfuzz_runner_t *      runner,
   }
 
   /* Sort tmp[] by pubkey, note: comparator relies on first struct member */
-  qsort( tmp, gather_cnt, sizeof(pk_with_pos_t),
-         (int(*)( void const*, void const* ))fd_pubkey_cmp );
+  sort_pkpos_inplace( tmp, (ulong)gather_cnt );
 
   /* Dedupe and assign indices into sched_mapped[] during single pass */
   ulong uniq_cnt = 0UL;
-  for( ulong i = 0UL; i<gather_cnt; i++ ) {
+  for( ulong i=0UL; i<gather_cnt; i++ ) {
     if( i==0UL || memcmp( &tmp[i].pk, &tmp[i-1].pk, sizeof(fd_pubkey_t) )!=0 )
       uniq_cnt++;
     /* uniq_cnt-1 is index in uniq set */
