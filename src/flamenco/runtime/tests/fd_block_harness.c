@@ -660,7 +660,7 @@ fd_solfuzz_block_run( fd_solfuzz_runner_t * runner,
 
     /* Start saving block exec results */
     FD_SCRATCH_ALLOC_INIT( l, output_buf );
-    ulong output_end = ( ulong )output_buf + output_bufsz;
+    ulong output_end = (ulong)output_buf + output_bufsz;
 
     fd_exec_test_block_effects_t * effects =
     FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_exec_test_block_effects_t),
@@ -696,6 +696,6 @@ fd_solfuzz_block_run( fd_solfuzz_runner_t * runner,
     fd_runtime_fuzz_block_ctx_destroy( runner );
 
     *output = effects;
-    return actual_end - ( ulong )output_buf;
+    return actual_end - (ulong)output_buf;
   } FD_SPAD_FRAME_END;
 }
