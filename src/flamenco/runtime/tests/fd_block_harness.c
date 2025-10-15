@@ -521,7 +521,7 @@ fd_hash_epoch_leaders( fd_solfuzz_runner_t *      runner,
 
   /* Dedupe adjacent entries in-place (sorted) */
   ulong dedup_cnt = 0UL;
-  for( ulong i = 0UL; i < uniq_cnt; i++ ) {
+  for( ulong i=0UL; i<uniq_cnt; i++ ) {
     if( dedup_cnt == 0 ||
         memcmp( uniq + dedup_cnt - 1, uniq + i, sizeof(fd_pubkey_t) ) != 0 ) {
       uniq[dedup_cnt++] = uniq[i];
