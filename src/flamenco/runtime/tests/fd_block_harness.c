@@ -489,12 +489,12 @@ fd_hash_epoch_leaders( fd_solfuzz_runner_t *      runner,
     ulong       sched_pos; /* track original position in sched[] */
   } pk_with_pos_t;
 
-  /* Single contiguou spad allocation for uniq[] and sched_mapped[] */
+  /* Single contiguous spad allocation for uniq[] and sched_mapped[] */
   void *buf = fd_spad_alloc(
     runner->spad,
     alignof(pk_with_pos_t),
-    leaders->sched_cnt * sizeof(pk_with_pos_t) +
-    leaders->sched_cnt * sizeof(uint) );
+    leaders->sched_cnt*sizeof(pk_with_pos_t) +
+    leaders->sched_cnt*sizeof(uint) );
 
   pk_with_pos_t * tmp          = (pk_with_pos_t *)buf;
   uint          * sched_mapped = (uint *)( tmp + leaders->sched_cnt );
@@ -507,7 +507,7 @@ fd_hash_epoch_leaders( fd_solfuzz_runner_t *      runner,
       sched_mapped[i] = 0U;       /* prefill invalid mapping */
       continue;
     }
-    tmp[gather_cnt].pk        = leaders->pub[idx];
+    fd_memcpy( &tmp[gather_cnt].pk, &leaders->pub[idx], sizeof(fd_pubkey_t) );
     tmp[gather_cnt].sched_pos = i;
     gather_cnt++;
   }
@@ -518,17 +518,17 @@ fd_hash_epoch_leaders( fd_solfuzz_runner_t *      runner,
     return 0UL;
   }
 
-  /* Sort tmp[] by pubkey */
+  /* Sort tmp[] by pubkey, note: comparator relies on first struct member */
   qsort( tmp, gather_cnt, sizeof(pk_with_pos_t),
          (int(*)( void const*, void const* ))fd_pubkey_cmp );
 
   /* Dedupe and assign indices into sched_mapped[] during single pass */
   ulong uniq_cnt = 0UL;
-  for( ulong i = 0UL; i < gather_cnt; i++ ) {
+  for( ulong i = 0UL; i<gather_cnt; i++ ) {
     if( i==0UL || memcmp( &tmp[i].pk, &tmp[i-1].pk, sizeof(fd_pubkey_t) )!=0 )
       uniq_cnt++;
     /* uniq_cnt-1 is index in uniq set */
-    sched_mapped[tmp[i].sched_pos] = (uint)(uniq_cnt-1);
+    sched_mapped[tmp[i].sched_pos] = (uint)(uniq_cnt-1UL);
   }
 
   /* Reconstruct contiguous uniq[] for hashing */
@@ -539,17 +539,17 @@ fd_hash_epoch_leaders( fd_solfuzz_runner_t *      runner,
     ulong write_pos = 0UL;
     for( ulong i=0UL; i<gather_cnt; i++ ) {
       if( i==0UL || memcmp( &tmp[i].pk, &tmp[i-1].pk, sizeof(fd_pubkey_t) )!=0 )
-        uniq[write_pos++] = tmp[i].pk;
+      fd_memcpy( &uniq[write_pos++], &tmp[i].pk, sizeof(fd_pubkey_t) );
     }
   }
 
   /* Hash sorted unique pubkeys */
   ulong h1 = fd_hash( seed, uniq, uniq_cnt * sizeof(fd_pubkey_t) );
-  memcpy( out, &h1, sizeof(ulong) );
+  fd_memcpy( out, &h1, sizeof(ulong) );
 
   /* Hash mapped indices */
   ulong h2 = fd_hash( seed, sched_mapped, leaders->sched_cnt * sizeof(uint) );
-  memcpy( out + sizeof(ulong), &h2, sizeof(ulong) );
+  fd_memcpy( out + sizeof(ulong), &h2, sizeof(ulong) );
 
   return uniq_cnt;
 }
