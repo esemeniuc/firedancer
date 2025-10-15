@@ -467,7 +467,7 @@ fd_snp_finalize_snp_and_invoke_tx_cb(
     return 0;
   }
   if( FD_UNLIKELY( !fd_snp_has_enough_flow_tx_credit( snp, conn ) ) ) {
-    FD_DEBUG_SNP( FD_LOG_WARNING(( "[snp-finalize] unable to send snp pkt due to insufficient flow tx credits" )) );
+    FD_SNP_LOG_DEBUG_W( "[snp-finalize] unable to send snp pkt due to insufficient flow tx credits %s", FD_SNP_LOG_CONN( conn ) );
     return -1;
   }
   fd_snp_incr_flow_tx_level( snp, conn, packet_sz );
@@ -485,13 +485,13 @@ fd_snp_verify_snp_and_invoke_rx_cb(
   fd_snp_meta_t   meta
 ) {
   if( FD_UNLIKELY( !fd_snp_has_enough_flow_rx_credit( snp, conn ) ) ) {
-    FD_DEBUG_SNP( FD_LOG_WARNING(( "[snp-verify] unable to verify snp pkt due to insufficient flow rx credits" )) );
+    FD_SNP_LOG_DEBUG_W( "[snp-verify] unable to verify snp pkt due to insufficient flow rx credits %s", FD_SNP_LOG_CONN( conn ) );
     return -1;
   }
   fd_snp_incr_flow_rx_level( snp, conn, packet_sz );
   int res = fd_snp_v1_validate_packet( conn, packet+sizeof(fd_ip4_udp_hdrs_t), packet_sz-sizeof(fd_ip4_udp_hdrs_t) );
   if( FD_UNLIKELY( res < 0 ) ) {
-    FD_DEBUG_SNP( FD_LOG_WARNING(( "[snp-verify] validate packet failed with res=%d", res )) );
+    FD_SNP_LOG_DEBUG_W( "[snp-verify] validate packet failed with res=%d %s", res, FD_SNP_LOG_CONN( conn ) );
     return res;
   }
   conn->last_recv_ts = fd_snp_timestamp_ms();
@@ -499,10 +499,10 @@ fd_snp_verify_snp_and_invoke_rx_cb(
   if( FD_LIKELY( packet[data_offset]==FD_SNP_FRAME_DATAGRAM ) ) {
     return snp->cb.rx( snp->cb.ctx, packet, packet_sz, meta );
   } else if( FD_LIKELY( packet[data_offset]==FD_SNP_FRAME_PING ) ) {
-    FD_DEBUG_SNP( FD_LOG_NOTICE(( "[snp] received PING ")) );
+    FD_SNP_LOG_DEBUG_N( "[snp] received PING %s", FD_SNP_LOG_CONN( conn ) );
     return 0;
   }
-  FD_DEBUG_SNP( FD_LOG_WARNING(( "[snp-verify] nothing to do!?" )) );
+  FD_SNP_LOG_DEBUG_W( "[snp-verify] nothing to do!? %s", FD_SNP_LOG_CONN( conn ) );
   return 0;
 }
 
@@ -651,7 +651,7 @@ fd_snp_pkt_pool_process(
       ele->session_id = 0;
       fd_snp_pkt_pool_idx_release( snp->pkt_pool, idx );
 
-      FD_DEBUG_SNP( if( res<0 ) FD_LOG_WARNING(( "[snp-pool] unable to process cached packet ele->send=%u", ele->send )) );
+      if( res<0 ) { FD_SNP_LOG_DEBUG_W( "[snp-pool] unable to process cached packet ele->send=%u %s", ele->send, FD_SNP_LOG_CONN( conn ) ); }
     }
     if( ++used_ele>=used ) break;
   }
@@ -725,7 +725,7 @@ fd_snp_send( fd_snp_t *    snp,
   /* 2. If proto==UDP, send packet as UDP */
   ulong proto = meta & FD_SNP_META_PROTO_MASK;
   if( FD_LIKELY( proto==FD_SNP_META_PROTO_UDP ) ) {
-    FD_DEBUG_SNP( FD_LOG_NOTICE(( "[snp-send] UDP send" )) );
+    FD_SNP_LOG_TRACE( "[snp-send] UDP send" );
     return fd_snp_finalize_udp_and_invoke_tx_cb( snp, packet, packet_sz, meta );
   }
 
@@ -741,7 +741,7 @@ fd_snp_send( fd_snp_t *    snp,
       }
       return fd_snp_finalize_multicast_and_invoke_tx_cb( snp, conn, packet, packet_sz, meta );
     }
-    FD_DEBUG_SNP( FD_LOG_NOTICE(( "[snp-send] SNP send" )) );
+    FD_SNP_LOG_TRACE( "[snp-send] SNP send %s", FD_SNP_LOG_CONN( conn ) );
     return fd_snp_finalize_snp_and_invoke_tx_cb( snp, conn, packet, packet_sz, meta );
   } /* else is implicit */
 
@@ -754,15 +754,15 @@ fd_snp_send( fd_snp_t *    snp,
     conn->is_server = 0;
   }
   if( FD_UNLIKELY( conn==NULL ) ) {
-    FD_DEBUG_SNP( FD_LOG_WARNING(( "[snp-send] fd_snp_conn_create returned NULL" )) );
+    FD_SNP_LOG_DEBUG_W( "[snp-send] fd_snp_conn_create returned NULL %s", FD_SNP_LOG_CONN( conn ) );
     return -1;
   }
 
   /* 6. If packet_sz > 0, cache current packet */
   if( packet_sz>0 ) {
-    FD_DEBUG_SNP( FD_LOG_NOTICE(( "[snp-send] cache packet" )) );
+    FD_SNP_LOG_TRACE( "[snp-send] cache packet" );
     if( FD_UNLIKELY( fd_snp_pkt_pool_store( snp, conn, packet, packet_sz, /* send */ 1 ) < 0 ) ) {
-      FD_LOG_WARNING(( "unable to cache packet in pool due to insufficient space" ));
+      FD_LOG_WARNING(( "unable to cache packet in pool due to insufficient space %s", fd_snp_log_conn( conn ) ));
       return -1;
     }
   }
@@ -775,12 +775,12 @@ fd_snp_send( fd_snp_t *    snp,
   /* 8. Prepare client_initial, overwrite packet */
   int sz = fd_snp_v1_client_init( &snp->config, conn, NULL, 0UL, packet + sizeof(fd_ip4_udp_hdrs_t), NULL );
   if( FD_UNLIKELY( sz<=0 ) ) {
-    FD_DEBUG_SNP( FD_LOG_WARNING(( "[snp-send] fd_snp_s0_client_initial failed" )) );
+    FD_SNP_LOG_DEBUG_W( "[snp-send] fd_snp_s0_client_initial failed %s", FD_SNP_LOG_CONN( conn ) );
     return -1;
   }
 
   /* 9. Send client_initial */
-  FD_DEBUG_SNP( FD_LOG_NOTICE(( "[snp-send] SNP send hs1 session_id=%016lx", conn->session_id )) );
+  FD_SNP_LOG_DEBUG_N( "[snp-send] SNP send hs1 %s", FD_SNP_LOG_CONN( conn ) );
   packet_sz = (ulong)sz + sizeof(fd_ip4_udp_hdrs_t);
   fd_snp_cache_packet_for_retry( conn, packet, packet_sz, meta | FD_SNP_META_OPT_HANDSHAKE );
   return fd_snp_finalize_udp_and_invoke_tx_cb( snp, packet, packet_sz, meta | FD_SNP_META_OPT_HANDSHAKE );
@@ -826,7 +826,7 @@ fd_snp_process_packet( fd_snp_t * snp,
   }
   if( FD_UNLIKELY( snp_app_id>=snp->apps_cnt ) ) {
     /* The packet is not for SNP, ignore */
-    FD_DEBUG_SNP( FD_LOG_NOTICE(( "[snp-pkt] app not found for dst_port=%u, fallback to UDP", dst_port )) );
+    FD_SNP_LOG_TRACE( "[snp-pkt] app not found for dst_port=%u, fallback to UDP", dst_port );
     fd_snp_meta_t meta = fd_snp_meta_from_parts( FD_SNP_META_PROTO_UDP, snp_app_id, src_ip, src_port );
     return snp->cb.rx( snp->cb.ctx, packet, packet_sz, meta );
   }
@@ -864,7 +864,7 @@ fd_snp_process_packet( fd_snp_t * snp,
 
     /* R2. Validate conn, or drop */
     if( FD_UNLIKELY( conn==NULL || conn->peer_addr != peer_addr ) ) {
-      FD_DEBUG_SNP( FD_LOG_WARNING(( "[snp-pkt] invalid conn or IP" )) );
+      FD_SNP_LOG_DEBUG_W( "[snp-pkt] invalid conn or IP" );
       return -1;
     }
 
@@ -875,16 +875,16 @@ fd_snp_process_packet( fd_snp_t * snp,
       /* This assumes that every wmark update is sent in a separate packet. */
       if( FD_UNLIKELY( tlv[0].type==FD_SNP_FRAME_MAX_DATA ) ) {
         if( FD_UNLIKELY( tlv[0].len!=8U ) ) {
-          FD_DEBUG_SNP( FD_LOG_WARNING(( "[snp-pkt] tlv type %u len %u mismatch!", tlv[0].type, tlv[0].len )) );
+          FD_SNP_LOG_DEBUG_W( "[snp-pkt] tlv type %u len %u mismatch! %s", tlv[0].type, tlv[0].len, FD_SNP_LOG_CONN( conn ) );
           return -1;
         }
         int res = fd_snp_v1_validate_packet( conn, packet+sizeof(fd_ip4_udp_hdrs_t), packet_sz-sizeof(fd_ip4_udp_hdrs_t) );
         if( FD_UNLIKELY( res < 0 ) ) {
-          FD_DEBUG_SNP( FD_LOG_WARNING(( "[snp-pkt] tlv type %u fd_snp_v1_validate_packet failed with res %d", tlv[0].type, res )) );
+          FD_SNP_LOG_DEBUG_W( "[snp-pkt] tlv type %u fd_snp_v1_validate_packet failed with res %d %s", tlv[0].type, res, FD_SNP_LOG_CONN( conn ) );
           return -1;
         }
         long wmark = (long)tlv[0].u64;
-        FD_DEBUG_SNP( FD_LOG_NOTICE(( "[snp-pkt] tlv type %u previous wmark %ld new wmark %ld", tlv[0].type, conn->flow_tx_wmark, wmark )) );
+        FD_SNP_LOG_TRACE( "[snp-pkt] tlv type %u previous wmark %ld new wmark %ld %s", tlv[0].type, conn->flow_tx_wmark, wmark, FD_SNP_LOG_CONN( conn ) );
         conn->flow_tx_wmark = wmark;
         conn->last_recv_ts = fd_snp_timestamp_ms();
         return 0;
@@ -895,7 +895,7 @@ fd_snp_process_packet( fd_snp_t * snp,
     /* R4. state==4 or 5, cache packet */
     if( FD_LIKELY( conn->state==FD_SNP_TYPE_HS_SERVER_FINI || conn->state==FD_SNP_TYPE_HS_CLIENT_FINI ) ) {
       if( FD_UNLIKELY( fd_snp_pkt_pool_store( snp, conn, packet, packet_sz, /* recv */ 0 ) < 0 ) ) {
-        FD_LOG_WARNING(( "unable to cache packet in pool" ));
+        FD_LOG_WARNING(( "unable to cache packet in pool %s", fd_snp_log_conn( conn ) ));
         return -1;
       };
       return 0;
@@ -916,11 +916,13 @@ fd_snp_process_packet( fd_snp_t * snp,
     case FD_SNP_TYPE_HS_CLIENT_INIT: {
       fd_snp_conn_t _conn[1] = { 0 }; _conn->peer_addr = peer_addr;
       sz = fd_snp_v1_server_init( &snp->config, _conn, pkt, pkt_sz, pkt, NULL );
+      FD_SNP_LOG_DEBUG_N( "[snp-hsk] fd_snp_v1_server_init sz=%d %s", sz, FD_SNP_LOG_CONN( conn ) );
     } break;
 
     /* HS2. Client receives server_init and sends client_cont */
     case FD_SNP_TYPE_HS_SERVER_INIT: {
       sz = fd_snp_v1_client_cont( &snp->config, conn, pkt, pkt_sz, pkt, NULL );
+      FD_SNP_LOG_DEBUG_N( "[snp-hsk] fd_snp_v1_client_cont sz=%d %s", sz, FD_SNP_LOG_CONN( conn ) );
       if( sz > 0 ) {
         fd_snp_dest_meta_map_update_on_handshake( snp, conn );
       }
@@ -930,6 +932,7 @@ fd_snp_process_packet( fd_snp_t * snp,
     case FD_SNP_TYPE_HS_CLIENT_CONT: {
       fd_snp_conn_t _conn[1] = { 0 }; _conn->peer_addr = peer_addr;
       sz = fd_snp_v1_server_fini_precheck( &snp->config, _conn, pkt, pkt_sz, pkt, to_sign );
+      FD_SNP_LOG_DEBUG_N( "[snp-hsk] fd_snp_v1_server_fini_precheck sz=%d %s", sz, FD_SNP_LOG_CONN( conn ) );
       if( FD_UNLIKELY( sz < 0 ) ) {
         return -1;
       }
@@ -947,6 +950,7 @@ fd_snp_process_packet( fd_snp_t * snp,
         return fd_snp_retry_cached_packet( snp, conn );
       }
       sz = fd_snp_v1_server_fini( &snp->config, conn, pkt, pkt_sz, pkt, to_sign );
+      FD_SNP_LOG_DEBUG_N( "[snp-hsk] fd_snp_v1_server_fini sz=%d %s", sz, FD_SNP_LOG_CONN( conn ) );
       if( FD_UNLIKELY( sz < 0 ) ) {
         return -1;
       }
@@ -963,6 +967,7 @@ fd_snp_process_packet( fd_snp_t * snp,
       }
       if( FD_LIKELY( conn->state == FD_SNP_TYPE_HS_CLIENT_CONT ) ) {
         sz = fd_snp_v1_client_fini( &snp->config, conn, pkt, pkt_sz, pkt, to_sign );
+        FD_SNP_LOG_DEBUG_N( "[snp-hsk] fd_snp_v1_client_fini sz=%d %s", sz, FD_SNP_LOG_CONN( conn ) );
         if( FD_UNLIKELY( sz < 0 ) ) {
           return -1;
         }
@@ -984,6 +989,7 @@ fd_snp_process_packet( fd_snp_t * snp,
         return -1;
       }
       sz = fd_snp_v1_server_acpt( &snp->config, conn, pkt, pkt_sz, pkt, NULL );
+      FD_SNP_LOG_DEBUG_N( "[snp-hsk] fd_snp_v1_server_acpt sz=%d %s", sz, FD_SNP_LOG_CONN( conn ) );
       if( FD_LIKELY( sz>=0 ) ) {
         conn->last_recv_ts = fd_snp_timestamp_ms();
         /* Update the default connection to peer_addr to this conn */
@@ -1076,28 +1082,28 @@ fd_snp_housekeeping( fd_snp_t * snp ) {
     used_ele++;
 
     if( conn->state==FD_SNP_STATE_INVALID ) {
-      FD_LOG_WARNING(( "[snp-hkp] connection invalid session_id=%016lx", conn->session_id ));
+      FD_LOG_WARNING(( "[snp-hkp] connection invalid %s", fd_snp_log_conn( conn ) ));
       fd_snp_conn_delete( snp, conn );
       continue;
     }
 
     if( FD_SNP_STATE_INVALID < conn->state && conn->state < FD_SNP_TYPE_HS_DONE ) {
-      if( conn->retry_cnt == FD_SNP_HANDSHAKE_RETRY_MAX ) {
-        FD_LOG_WARNING(( "[snp-hkp] retry expired - deleting session_id=%016lx", conn->session_id ));
+      if( conn->retry_cnt >= FD_SNP_HANDSHAKE_RETRY_MAX ) {
+        FD_SNP_LOG_DEBUG_W( "[snp-hkp] retry expired - deleting %s", FD_SNP_LOG_CONN( conn ) );
         fd_snp_conn_delete( snp, conn );
         continue;
       }
-      if( now > conn->last_sent_ts + FD_SNP_HANDSHAKE_RETRY_MS
-        && ++conn->retry_cnt < FD_SNP_HANDSHAKE_RETRY_MAX ) {
-        FD_DEBUG_SNP( FD_LOG_NOTICE(( "[snp-hkp] retry %d session_id=%016lx", conn->retry_cnt, conn->session_id )) );
+      if( now > conn->last_sent_ts + FD_SNP_HANDSHAKE_RETRY_MS ) {
+        FD_SNP_LOG_DEBUG_N( "[snp-hkp] retry %d %s", conn->retry_cnt, FD_SNP_LOG_CONN( conn ) );
         fd_snp_retry_cached_packet( snp, conn );
+        conn->retry_cnt++;
         continue;
       }
     }
 
     if( FD_LIKELY( conn->state==FD_SNP_TYPE_HS_DONE ) ) {
       if( now > conn->last_recv_ts + FD_SNP_TIMEOUT_MS ) {
-        FD_LOG_WARNING(( "[snp-hkp] timeout - deleting session_id=%016lx", conn->session_id ));
+        FD_SNP_LOG_DEBUG_W( "[snp-hkp] timeout - deleting %s", FD_SNP_LOG_CONN( conn ) );
         fd_snp_conn_delete( snp, conn );
 
         uint   ip4_addr = 0;
@@ -1107,19 +1113,16 @@ fd_snp_housekeeping( fd_snp_t * snp ) {
         fd_snp_dest_meta_map_t sentinel = { 0 };
         fd_snp_dest_meta_map_t * entry = fd_snp_dest_meta_map_query( snp->dest_meta_map, dest_meta_map_key, &sentinel );
         if( !entry->key ) {
-          FD_LOG_WARNING(( "dest_meta_map unable to delete %u.%u.%u.%u:%u",
-            (ip4_addr>>0)&0xff, (ip4_addr>>8)&0xff, (ip4_addr>>16)&0xff, (ip4_addr>>24)&0xff, udp_port ));
+          FD_SNP_LOG_DEBUG_W( "[snp-hkp] dest_meta_map unable to delete %s", FD_SNP_LOG_CONN( conn ) );
         } else {
           entry->val.snp_enabled = 0;
-          FD_LOG_NOTICE(( "%u.%u.%u.%u:%u snp_available %x snp_enabled %x (** disabled **)",
-            (entry->val.ip4_addr>>0)&0xff, (entry->val.ip4_addr>>8)&0xff, (entry->val.ip4_addr>>16)&0xff, (entry->val.ip4_addr>>24)&0xff, entry->val.udp_port,
-            entry->val.snp_available, entry->val.snp_enabled ));
+          FD_SNP_LOG_DEBUG_N( "[snp-hkp] %s snp_available %x snp_enabled %x (** disabled **)", FD_SNP_LOG_CONN( conn ), entry->val.snp_available, entry->val.snp_enabled );
         }
 
         continue;
       }
       if( now > conn->last_sent_ts + FD_SNP_KEEP_ALIVE_MS ) {
-        FD_LOG_WARNING(( "[snp-hkp] keep alive - pinging session_id=%016lx peer_session_id=%016lx", conn->session_id, conn->peer_session_id ));
+        FD_SNP_LOG_TRACE( "[snp-hkp] keep alive - pinging %s", FD_SNP_LOG_CONN( conn ) );
         fd_snp_send_ping( snp, conn );
         continue;
       }
@@ -1139,7 +1142,7 @@ fd_snp_housekeeping( fd_snp_t * snp ) {
            may be crossed only once.  This minimizes the calculations
            around the crossing boundary and avoids weird edge cases. */
         long wmark = fd_long_min( conn->flow_rx_level, conn->flow_rx_wmark ) + conn->flow_rx_alloc - (long)FD_SNP_MTU;
-        FD_DEBUG_SNP( FD_LOG_NOTICE(( "[snp-hkp] updating flow rx wmark from %ld to %ld for session_id %016lx level %ld", conn->flow_rx_wmark, wmark, conn->session_id, conn->flow_rx_level )) );
+        FD_SNP_LOG_TRACE( "[snp-hkp] updating flow rx wmark from %ld to %ld for %s level %ld", conn->flow_rx_wmark, wmark, FD_SNP_LOG_CONN( conn ), conn->flow_rx_level );
         conn->flow_rx_wmark = wmark;
         fd_snp_send_flow_rx_wmark_packet( snp, conn );
       }
@@ -1163,9 +1166,6 @@ fd_snp_housekeeping( fd_snp_t * snp ) {
         curr_entry->key = fd_snp_dest_meta_map_key_null();
       }
     }
-    FD_LOG_NOTICE(( "fd_snp_dest_meta_map cloned from %s (%lu) to %s (%lu)",
-      curr_map==snp->dest_meta_map_a ? "A" : "B", fd_snp_dest_meta_map_key_cnt( curr_map ),
-      next_map==snp->dest_meta_map_b ? "B" : "A", fd_snp_dest_meta_map_key_cnt( next_map ) ));
 
     /* manually reset current map's key_cnt, avoiding fd_snp_dest_meta_map_clear() overhead. */
     fd_snp_dest_meta_map_private_t * hdr = fd_snp_dest_meta_map_private_from_slot( curr_map );

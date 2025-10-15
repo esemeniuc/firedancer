@@ -6,6 +6,7 @@
 #include "../../util/fd_util_base.h"
 #include "../../util/rng/fd_rng.h"
 #include "../../ballet/aes/fd_aes_base.h"
+#include <stdio.h> /* sprintf */
 
 /* SNP_MTU controls the maximum supported UDP payload size. */
 
@@ -261,6 +262,17 @@ fd_snp_hdr_version_type( uint version,
     | (uint)'S' << 0
     | (uint)'N' << 8
     | (uint)'P' << 16;
+}
+
+static inline char*
+fd_snp_log_conn( fd_snp_conn_t * conn ) {
+  static char buf[256];
+  if( !conn ) return "";
+  uint   ip4  = (uint  )( conn->peer_addr>>0  );
+  ushort port = (ushort)( conn->peer_addr>>32 );
+  sprintf( buf, "session_id=%016lx peer=%u.%u.%u.%u:%u",
+    conn->session_id, (ip4>>0)&0xff, (ip4>>8)&0xff, (ip4>>16)&0xff, (ip4>>24)&0xff, port );
+  return buf;
 }
 
 FD_PROTOTYPES_END

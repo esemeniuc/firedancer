@@ -141,13 +141,11 @@ scratch_footprint( fd_topo_tile_t const * tile ) {
 static inline void
 during_housekeeping( fd_snp_tile_ctx_t * ctx ) {
   if( FD_UNLIKELY( fd_keyswitch_state_query( ctx->keyswitch )==FD_KEYSWITCH_STATE_SWITCH_PENDING ) ) {
-    FD_LOG_WARNING(( "SET_IDENTITY_START" ));
     fd_memcpy( ctx->identity_key->uc, ctx->keyswitch->bytes, 32UL );
     fd_stake_ci_set_identity( ctx->stake_ci, ctx->identity_key );
     fd_keyswitch_state( ctx->keyswitch, FD_KEYSWITCH_STATE_COMPLETED );
 
     fd_snp_set_identity( ctx->snp, ctx->identity_key->uc );
-    FD_LOG_WARNING(( "SET_IDENTITY_END" ));
   }
 
   /* SNP housekeeping */
@@ -180,9 +178,6 @@ handle_new_cluster_contact_info( fd_snp_tile_ctx_t * ctx,
   fd_shred_dest_wire_t const * in_dests = fd_type_pun_const( header+1UL );
   fd_shred_dest_weighted_t * dests = fd_stake_ci_dest_add_init( ctx->stake_ci );
 
-  if( ctx->new_dest_cnt!=dest_cnt ) {
-    FD_LOG_NOTICE(( "[SNP] handle_new_cluster_contact_info, dest_cnt %lu", dest_cnt ));
-  }
   ctx->new_dest_ptr = dests;
   ctx->new_dest_cnt = dest_cnt;
 
@@ -303,7 +298,6 @@ during_frag( fd_snp_tile_ctx_t * ctx,
       fd_snp_meta_t meta = fd_snp_meta_from_parts( snp_enabled ? FD_SNP_META_PROTO_V1 : FD_SNP_META_PROTO_UDP, 0/*app_id*/, ip4_daddr, udp_dport );
       int res = fd_snp_app_send( ctx->snp_app, ctx->packet, FD_NET_MTU, dcache_entry + sizeof(fd_ip4_udp_hdrs_t), sz - sizeof(fd_ip4_udp_hdrs_t), meta );
       if( res < 0 ) {
-        FD_LOG_WARNING(( "fd_snp_app_send returned res %d", res ));
         ctx->skip_frag = 1;
       }
       ctx->packet_sz = (ulong)res;
@@ -376,7 +370,6 @@ during_frag( fd_snp_tile_ctx_t * ctx,
 
       uchar const * dcache_entry = fd_chunk_to_laddr_const( ctx->in[ in_idx ].mem, chunk );
       fd_stake_ci_stake_msg_init( ctx->stake_ci, fd_type_pun_const( dcache_entry ) );
-      FD_LOG_NOTICE(( "[SNP] fd_stake_ci_stake_msg_init" ));
     } break;
   }
 }
@@ -403,7 +396,6 @@ after_frag( fd_snp_tile_ctx_t * ctx,
 
     case IN_KIND_NET_SHRED: {
       /* Process incoming network packets */
-      FD_DEBUG_SNP( FD_LOG_NOTICE(( "[snp] received from net %lu, processing", ctx->packet_sz )) );
       fd_snp_process_packet( ctx->snp, ctx->packet, ctx->packet_sz );
     } break;
 
@@ -422,7 +414,6 @@ after_frag( fd_snp_tile_ctx_t * ctx,
 
     case IN_KIND_STAKE: {
       fd_stake_ci_stake_msg_fini( ctx->stake_ci );
-      FD_LOG_NOTICE(( "[SNP] fd_stake_ci_stake_msg_fini" ));
     } break;
   }
 }
@@ -455,8 +446,6 @@ snp_callback_tx( void const *  _ctx,
   ctx->metrics->tx_bytes_via_snp_cnt += fd_ulong_if( is_snp, packet_sz, 0UL );
   ctx->metrics->tx_pkts_via_udp_cnt  += fd_ulong_if( is_snp, 0UL, 1UL );
   ctx->metrics->tx_pkts_via_snp_cnt  += fd_ulong_if( is_snp, 1UL, 0UL );
-
-  FD_DEBUG_SNP( FD_LOG_NOTICE(( "[snp] publish to net %lu to %u:%u", packet_sz, dst_ip, dst_port )) );
   return FD_SNP_SUCCESS;
 }
 
@@ -493,8 +482,6 @@ snp_callback_rx( void const *  _ctx,
 
   fd_stem_publish( ctx->stem, SHRED_OUT_IDX /*ctx->shred_out_idx*/, sig, ctx->shred_out_chunk, adj_packet_sz, adj_ctl, ctx->tsorig, tspub );
   ctx->shred_out_chunk = fd_dcache_compact_next( ctx->shred_out_chunk, packet_sz, ctx->shred_out_chunk0, ctx->shred_out_wmark );
-
-  FD_DEBUG_SNP( FD_LOG_NOTICE(( "[snp] publish to shred %lu meta=%016lx", packet_sz, sig )) );
   return FD_SNP_SUCCESS;
 }
 
@@ -514,8 +501,6 @@ snp_callback_sign( void const *  _ctx,
   memcpy( dst+sizeof(ulong), to_sign, FD_SNP_TO_SIGN_SZ - sizeof(ulong) );
   fd_stem_publish( ctx->stem, SIGN_OUT_IDX /*ctx->sign_out_idx*/, sig, ctx->sign_out_chunk, FD_SNP_TO_SIGN_SZ, 0UL, ctx->tsorig, tspub );
   ctx->sign_out_chunk = fd_dcache_compact_next( ctx->sign_out_chunk, FD_SNP_TO_SIGN_SZ, ctx->sign_out_chunk0, ctx->sign_out_wmark );
-
-  FD_LOG_NOTICE(( "[snp] publish to sign %016lx", session_id ));
   return FD_SNP_SUCCESS;
 }
 

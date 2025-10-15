@@ -4,7 +4,8 @@
 #include "../../util/fd_util_base.h"
 #include "../../util/bits/fd_bits.h"
 
-#define FD_DEBUG_SNP_ENABLED (0)
+#define FD_SNP_DEBUG_ENABLED (0)
+#define FD_SNP_TRACE_ENABLED (0)
 
 #define FD_SNP_META_PROTO_UDP     (0x0000000000000000UL)
 #define FD_SNP_META_PROTO_V1      (0x0100000000000000UL)
@@ -157,11 +158,24 @@ fd_snp_tlv_extract_fast( uchar const * buf,
 
 FD_PROTOTYPES_END
 
-
-#if FD_DEBUG_SNP_ENABLED
-#define FD_DEBUG_SNP(...) __VA_ARGS__
+#if FD_SNP_TRACE_ENABLED
+#undef  FD_SNP_DEBUG_ENABLED
+#define FD_SNP_DEBUG_ENABLED (1)
+#define FD_SNP_LOG_TRACE(...) FD_LOG_NOTICE(( __VA_ARGS__ ))
 #else
-#define FD_DEBUG_SNP(...)
+#define FD_SNP_LOG_TRACE(...)
 #endif
+
+#if FD_SNP_DEBUG_ENABLED
+#define FD_SNP_LOG_DEBUG_N(...) FD_LOG_NOTICE(( __VA_ARGS__ ))
+#define FD_SNP_LOG_DEBUG_W(...) FD_LOG_WARNING(( __VA_ARGS__ ))
+#define FD_SNP_LOG_CONN( conn ) fd_snp_log_conn( conn )
+#else
+#define FD_SNP_LOG_DEBUG_N(...)
+#define FD_SNP_LOG_DEBUG_W(...)
+#define FD_SNP_LOG_CONN( conn ) ""
+#endif
+
+
 
 #endif
