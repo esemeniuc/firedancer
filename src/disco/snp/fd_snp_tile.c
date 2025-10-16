@@ -42,7 +42,7 @@ snp_limits( fd_topo_tile_t const * tile ) {
 #define SHRED_OUT_IDX    (1)
 #define SIGN_OUT_IDX     (2)
 
-#define SNP_MIN_FDCTL_MINOR_VERSION (709)
+#define SNP_MIN_FDCTL_MINOR_VERSION (711)
 
 typedef union {
   struct {
@@ -100,7 +100,9 @@ typedef struct {
   /* Metrics */
   struct {
     fd_histf_t contact_info_cnt[ 1 ];
-    fd_histf_t contact_snp_cnt[ 1 ];
+    ulong      dest_meta_cnt;
+    ulong      snp_avail_cnt;
+    ulong      snp_conn_cnt;
     ulong      tx_bytes_via_udp_cnt;
     ulong      tx_bytes_via_snp_cnt;
     ulong      tx_pkts_via_udp_cnt;
@@ -151,14 +153,19 @@ during_housekeeping( fd_snp_tile_ctx_t * ctx ) {
   /* SNP housekeeping */
   fd_snp_housekeeping( ctx->snp );
 
-  /* SNP logged metrics.  TODO improve! */
+  /* metrics */
+  ctx->metrics->dest_meta_cnt = fd_snp_dest_meta_map_key_cnt( ctx->snp->dest_meta_map );
+  ctx->metrics->snp_conn_cnt  = fd_snp_conn_pool_used( ctx->snp->conn_pool );
+
+#if FD_SNP_DEBUG_ENABLED
+  /* SNP logged metrics. */
   static long snp_next_metrics_log = 0L;
   long now = fd_snp_timestamp_ms();
   if( now > snp_next_metrics_log ) {
-    ulong used = fd_snp_conn_pool_used( ctx->snp->conn_pool );
-    FD_LOG_NOTICE(( "[SNP] contacts=%lu connections=%lu", ctx->new_dest_cnt, used ));
+    FD_LOG_NOTICE(( "[SNP] contacts=%lu connections=%lu", ctx->metrics->dest_meta_cnt, ctx->metrics->snp_conn_cnt ));
     snp_next_metrics_log = now + 10000L; /* Every 10 seconds. */
   }
+#endif
 }
 
 static inline void
@@ -168,10 +175,6 @@ handle_new_cluster_contact_info( fd_snp_tile_ctx_t * ctx,
   ulong const * header = (ulong const *)fd_type_pun_const( buf );
 
   ulong dest_cnt = header[ 0 ];
-  fd_histf_sample( ctx->metrics->contact_info_cnt, dest_cnt );
-
-  fd_histf_sample( ctx->metrics->contact_snp_cnt, dest_cnt );
-
   if( dest_cnt >= MAX_SHRED_DESTS )
     FD_LOG_ERR(( "Cluster nodes had %lu destinations, which was more than the max of %lu", dest_cnt, MAX_SHRED_DESTS ));
 
@@ -183,6 +186,8 @@ handle_new_cluster_contact_info( fd_snp_tile_ctx_t * ctx,
 
   ctx->snp->dest_meta_update_idx += 1UL;
 
+  ulong snp_available_cnt = 0UL;
+
   for( ulong i=0UL; i<dest_cnt; i++ ) {
     memcpy( dests[i].pubkey.uc, in_dests[i].pubkey, 32UL );
     uint   ip4_addr = in_dests[i].ip4_addr;
@@ -192,6 +197,7 @@ handle_new_cluster_contact_info( fd_snp_tile_ctx_t * ctx,
     dests[i].port = udp_port;
 
     uchar snp_available = (in_dests[i].version_minor >= SNP_MIN_FDCTL_MINOR_VERSION) ? 1U : 0U;
+    snp_available_cnt += (ulong)snp_available;
 
     ulong key = fd_snp_dest_meta_map_key_from_parts( ip4_addr, udp_port );
     fd_snp_dest_meta_map_t sentinel = { 0 };
@@ -200,6 +206,7 @@ handle_new_cluster_contact_info( fd_snp_tile_ctx_t * ctx,
     int is_new = 0;
     if( FD_UNLIKELY( !entry->key ) ) {
       entry = fd_snp_dest_meta_map_insert( ctx->snp->dest_meta_map, key );
+      if( !entry ) continue;
       entry->val.ip4_addr      = ip4_addr;
       entry->val.udp_port      = udp_port;
       entry->val.snp_available = snp_available;
@@ -207,6 +214,12 @@ handle_new_cluster_contact_info( fd_snp_tile_ctx_t * ctx,
       is_new = 1;
     }
 
+    /* If two or more pubkeys show the same ip4_addr and udp_port in
+       gossip (it has been observed in testnet), we need to avoid a
+       ping-pong around has_changed.  The downside to this approach
+       is that only the first entry in the gossip table will be
+       processed here. */
+    if( entry->val.update_idx == ctx->snp->dest_meta_update_idx ) continue;
     /* For every entry, whether new or not, the update index needs to
        be refreshed.  This is later used to detect (and delete)
        expired entries. */
@@ -225,6 +238,9 @@ handle_new_cluster_contact_info( fd_snp_tile_ctx_t * ctx,
       }
     }
   }
+  /* metrics */
+  fd_histf_sample( ctx->metrics->contact_info_cnt, dest_cnt );
+  ctx->metrics->snp_avail_cnt = snp_available_cnt;
 }
 
 static inline void
@@ -235,7 +251,10 @@ finalize_new_cluster_contact_info( fd_snp_tile_ctx_t * ctx ) {
 static inline void
 metrics_write( fd_snp_tile_ctx_t * ctx ) {
   FD_MHIST_COPY( SNP, CLUSTER_CONTACT_INFO_CNT, ctx->metrics->contact_info_cnt );
-  FD_MHIST_COPY( SNP, CLUSTER_CONTACT_SNP_CNT, ctx->metrics->contact_snp_cnt );
+
+  FD_MCNT_SET  ( SNP, DEST_META_CNT,          ctx->metrics->dest_meta_cnt );
+  FD_MCNT_SET  ( SNP, SNP_AVAIL_CNT,          ctx->metrics->snp_avail_cnt );
+  FD_MCNT_SET  ( SNP, SNP_CONN_CNT,           ctx->metrics->snp_conn_cnt );
 
   FD_MCNT_SET  ( SNP, TX_BYTES_VIA_UDP_CNT,   ctx->metrics->tx_bytes_via_udp_cnt );
   FD_MCNT_SET  ( SNP, TX_BYTES_VIA_SNP_CNT,   ctx->metrics->tx_bytes_via_snp_cnt );
@@ -627,10 +646,11 @@ unprivileged_init( fd_topo_t *      topo,
 
   ctx->packet = NULL;
 
-  fd_histf_join( fd_histf_new( ctx->metrics->contact_info_cnt,     FD_MHIST_MIN(         SNP, CLUSTER_CONTACT_INFO_CNT   ),
-                                                                   FD_MHIST_MAX(         SNP, CLUSTER_CONTACT_INFO_CNT   ) ) );
-  fd_histf_join( fd_histf_new( ctx->metrics->contact_snp_cnt,      FD_MHIST_MIN(         SNP, CLUSTER_CONTACT_SNP_CNT    ),
-                                                                   FD_MHIST_MAX(         SNP, CLUSTER_CONTACT_SNP_CNT    ) ) );
+  fd_histf_join( fd_histf_new( ctx->metrics->contact_info_cnt, FD_MHIST_MIN( SNP, CLUSTER_CONTACT_INFO_CNT ),
+                                                               FD_MHIST_MAX( SNP, CLUSTER_CONTACT_INFO_CNT ) ) );
+  ctx->metrics->dest_meta_cnt        = 0UL;
+  ctx->metrics->snp_avail_cnt        = 0UL;
+  ctx->metrics->snp_conn_cnt         = 0UL;
   ctx->metrics->tx_bytes_via_udp_cnt = 0UL;
   ctx->metrics->tx_bytes_via_snp_cnt = 0UL;
   ctx->metrics->tx_pkts_via_udp_cnt  = 0UL;

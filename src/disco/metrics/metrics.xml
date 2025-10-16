@@ -658,9 +658,9 @@ metric introduced.
     <histogram name="ClusterContactInfoCnt" min="0" max="40200">
         <summary>Number of contact infos in the cluster contact info message</summary>
     </histogram>
-    <histogram name="ClusterContactSnpCnt" min="0" max="40200">
-        <summary>Number of contact SNP in the cluster contact info message</summary>
-    </histogram>
+    <counter name="DestMetaCnt" summary="The total count of destinations with metadata" />
+    <counter name="SnpAvailCnt" summary="The total number of destinations that could support SNP" />
+    <counter name="SnpConnCnt" summary="The total number of SNP connections" />
     <counter name="TxBytesViaUdpCnt" summary="The total count of bytes sent via raw UDP" />
     <counter name="TxBytesViaSnpCnt" summary="The total count of bytes sent via SNP" />
     <counter name="TxPktsViaUdpCnt" summary="The total count of packets sent via raw UDP" />

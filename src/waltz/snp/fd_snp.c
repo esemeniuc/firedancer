@@ -1073,7 +1073,7 @@ fd_snp_housekeeping( fd_snp_t * snp ) {
 #define FD_SNP_HANDSHAKE_RETRY_MAX (5U)
 #define FD_SNP_HANDSHAKE_RETRY_MS  (500L)
 #define FD_SNP_KEEP_ALIVE_MS       (4000L)
-#define FD_SNP_TIMEOUT_MS          (10000L)
+#define FD_SNP_TIMEOUT_MS          (FD_SNP_KEEP_ALIVE_MS * 3L + 1000L)
 #define FD_SNP_DEST_META_UPDATE_MS (12000L)
 
   long now = fd_snp_timestamp_ms();
@@ -1117,6 +1117,10 @@ fd_snp_housekeeping( fd_snp_t * snp ) {
         } else {
           entry->val.snp_enabled = 0;
           FD_SNP_LOG_DEBUG_N( "[snp-hkp] %s snp_available %x snp_enabled %x (** disabled **)", FD_SNP_LOG_CONN( conn ), entry->val.snp_available, entry->val.snp_enabled );
+          /* Try to re-establish the connection one more time. */
+          fd_snp_meta_t meta = fd_snp_meta_from_parts( FD_SNP_META_PROTO_V1, 0/*app_id*/, ip4_addr, udp_port );
+          uchar packet[ FD_SNP_MTU ] = { 0 };
+          fd_snp_send( snp, packet, 0/*packet_sz*/, meta );
         }
 
         continue;

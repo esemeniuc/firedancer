@@ -882,7 +882,9 @@
 | Metric | Type | Description |
 |--------|------|-------------|
 | <span class="metrics-name">snp_&#8203;cluster_&#8203;contact_&#8203;info_&#8203;cnt</span> | histogram | Number of contact infos in the cluster contact info message |
-| <span class="metrics-name">snp_&#8203;cluster_&#8203;contact_&#8203;snp_&#8203;cnt</span> | histogram | Number of contact SNP in the cluster contact info message |
+| <span class="metrics-name">snp_&#8203;dest_&#8203;meta_&#8203;cnt</span> | counter | The total count of destinations with metadata |
+| <span class="metrics-name">snp_&#8203;snp_&#8203;avail_&#8203;cnt</span> | counter | The total number of destinations that could support SNP |
+| <span class="metrics-name">snp_&#8203;snp_&#8203;conn_&#8203;cnt</span> | counter | The total number of SNP connections |
 | <span class="metrics-name">snp_&#8203;tx_&#8203;bytes_&#8203;via_&#8203;udp_&#8203;cnt</span> | counter | The total count of bytes sent via raw UDP |
 | <span class="metrics-name">snp_&#8203;tx_&#8203;bytes_&#8203;via_&#8203;snp_&#8203;cnt</span> | counter | The total count of bytes sent via SNP |
 | <span class="metrics-name">snp_&#8203;tx_&#8203;pkts_&#8203;via_&#8203;udp_&#8203;cnt</span> | counter | The total count of packets sent via raw UDP |
