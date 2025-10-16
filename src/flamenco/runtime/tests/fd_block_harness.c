@@ -300,6 +300,18 @@ fd_runtime_fuzz_block_ctx_create( fd_solfuzz_runner_t *                runner,
                                                      &pubkey );
   }
 
+  /* Zero out T vote stakes to avoid leakage across tests */
+  fd_vote_states_iter_t it_[1];
+  for( fd_vote_states_iter_t *it = fd_vote_states_iter_init( it_, vote_states );
+       !fd_vote_states_iter_done( it );
+        fd_vote_states_iter_next( it ) )
+  {
+    fd_vote_state_ele_t *e = fd_vote_states_iter_ele( it );
+    if( FD_UNLIKELY( e->stake!=0UL ) ) {
+      fd_vote_states_update_stake( vote_states, &e->vote_account, 0UL );
+    }
+  }
+
   /* Refresh vote accounts to calculate stake delegations */
   fd_runtime_fuzz_block_refresh_vote_accounts( vote_states, stake_delegations );
   fd_bank_vote_states_end_locking_modify( bank );
