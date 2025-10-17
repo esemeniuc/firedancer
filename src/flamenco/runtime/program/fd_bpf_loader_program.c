@@ -1076,7 +1076,6 @@ process_loader_upgradeable_instruction( fd_exec_instr_ctx_t * instr_ctx ) {
       /* https://github.com/anza-xyz/agave/blob/574bae8fefc0ed256b55340b9d87b7689bcdf222/programs/bpf_loader/src/lib.rs#L542-L560 */
       /* Verify Program account */
 
-      fd_bpf_upgradeable_loader_state_t * loader_state   = NULL;
       fd_pubkey_t *                       new_program_id = NULL;
       fd_rent_t const *                   rent           = fd_bank_rent_query( instr_ctx->txn_ctx->bank );
 
@@ -1084,6 +1083,7 @@ process_loader_upgradeable_instruction( fd_exec_instr_ctx_t * instr_ctx ) {
       fd_guarded_borrowed_account_t program = {0};
       FD_TRY_BORROW_INSTR_ACCOUNT_DEFAULT_ERR_CHECK( instr_ctx, 2UL, &program );
 
+      fd_bpf_upgradeable_loader_state_t loader_state[1];
       int err = fd_bpf_loader_program_get_state( program.acct, loader_state );
       if( FD_UNLIKELY( err!=FD_BINCODE_SUCCESS ) ) {
         return err;
