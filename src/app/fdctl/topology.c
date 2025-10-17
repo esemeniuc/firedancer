@@ -555,6 +555,13 @@ fd_topo_initialize( config_t * config ) {
 
       tile->snp.depth                           = topo->links[ tile->out_link_id[ 0 ] ].depth;
 
+      tile->snp.enforced_destinations_cnt = config->tiles.snp.enforced_destinations_cnt;
+      for( ulong i=0UL; i<config->tiles.snp.enforced_destinations_cnt; i++ ) {
+        parse_ip_port( "tiles.snp.enforced_destinations",
+                       config->tiles.snp.enforced_destinations[ i ],
+                       &tile->snp.enforced_destinations[ i ] );
+      }
+
     } else if( FD_UNLIKELY( !strcmp( tile->name, "store" ) ) ) {
       tile->store.disable_blockstore_from_slot = config->development.bench.disable_blockstore_from_slot;
 

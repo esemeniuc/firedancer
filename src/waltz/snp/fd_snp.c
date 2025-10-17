@@ -235,6 +235,8 @@ fd_snp_init( fd_snp_t * snp ) {
   snp->dest_meta_update_idx      = 0UL;
   snp->dest_meta_next_update_ts  = 0UL;
 
+  snp->rng = fd_rng_join( fd_rng_new( snp->rng_mem, (uint)fd_tickcount() /*seed*/, 0UL ) );
+
   return snp;
 }
 
@@ -309,14 +311,15 @@ fd_snp_conn_create( fd_snp_t * snp,
   conn->_pubkey = snp->config.identity;
   conn->is_server = is_server;
   /* Currently, every connection is allocated the same  amount
-     of credits.  In the future, however, it may be possible to
-     allocate more credits to specific connections. */
+     of credits.  In the future, however, it may be possible
+     to allocate more credits to specific connections. */
   snp->flow_cred_taken += snp->flow_cred_alloc;
   conn->flow_rx_alloc = snp->flow_cred_alloc;
   conn->flow_rx_level = 0L;
   conn->flow_rx_wmark = snp->flow_cred_alloc;
+  conn->flow_rx_wmark_tstamp = fd_snp_timestamp_ms();
   conn->flow_tx_level = 0L;
-  conn->flow_tx_wmark = snp->flow_cred_alloc;
+  conn->flow_tx_wmark = LONG_MAX; /* This prevents any kind of deadlocks on startup.*/
 
   conn->is_multicast = 0;
 
@@ -461,12 +464,13 @@ fd_snp_finalize_snp_and_invoke_tx_cb(
   fd_snp_conn_t * conn,
   uchar *         packet,
   ulong           packet_sz,
-  fd_snp_meta_t   meta
+  fd_snp_meta_t   meta,
+  int             flow_tx_credit_bypass
 ) {
   if( FD_UNLIKELY( packet_sz==0 ) ) {
     return 0;
   }
-  if( FD_UNLIKELY( !fd_snp_has_enough_flow_tx_credit( snp, conn ) ) ) {
+  if( FD_UNLIKELY( !flow_tx_credit_bypass && !fd_snp_has_enough_flow_tx_credit( snp, conn ) ) ) {
     FD_SNP_LOG_DEBUG_W( "[snp-finalize] unable to send snp pkt due to insufficient flow tx credits %s", FD_SNP_LOG_CONN( conn ) );
     return -1;
   }
@@ -484,6 +488,41 @@ fd_snp_verify_snp_and_invoke_rx_cb(
   ulong           packet_sz,
   fd_snp_meta_t   meta
 ) {
+  /* Process wmark updates first. */
+  tlv_meta_t tlv[1];
+  ulong off = sizeof(fd_ip4_udp_hdrs_t) + sizeof(snp_hdr_t);
+  off       = fd_snp_tlv_extract_fast( packet, off, tlv );
+  /* This assumes that every wmark update is sent in a separate packet. */
+  if( FD_UNLIKELY( tlv[0].type==FD_SNP_FRAME_MAX_DATA ) ) {
+    int res = fd_snp_v1_validate_packet( conn, packet+sizeof(fd_ip4_udp_hdrs_t), packet_sz-sizeof(fd_ip4_udp_hdrs_t) );
+    if( FD_UNLIKELY( res < 0 ) ) {
+      FD_SNP_LOG_DEBUG_W( "[snp-pkt] tlv type %u fd_snp_v1_validate_packet failed with res %d %s", tlv[0].type, res, FD_SNP_LOG_CONN( conn ) );
+      return -1;
+    }
+    do {
+      if( tlv[0].len==8U ) {
+        long wmark = (long)fd_ulong_load_8( tlv[0].ptr + 0UL );
+        FD_SNP_LOG_TRACE( "[snp-pkt] tlv type %u wmark prev %ld new %ld %s", tlv[0].type, conn->flow_tx_wmark, wmark, FD_SNP_LOG_CONN( conn ) );
+        conn->flow_tx_wmark = wmark;
+      } else if( tlv[0].len==16U ) {
+        long wmark = (long)fd_ulong_load_8( tlv[0].ptr + 0UL );
+        long level = (long)fd_ulong_load_8( tlv[0].ptr + 8UL );
+        FD_SNP_LOG_TRACE( "[snp-pkt] tlv type %u wmark prev %ld new %ld level prev %ld new %ld %s", tlv[0].type, conn->flow_tx_wmark, wmark, conn->flow_tx_level, level, FD_SNP_LOG_CONN( conn ) );
+        conn->flow_tx_wmark = wmark;
+        /* This is not 100% accurate, since pkts may still be in flight when the
+           current level was sampled by the reciver, but this is acceptable. */
+        conn->flow_tx_level = level; /* It does its best to resync if pkts have been lost. */
+      } else {
+        FD_SNP_LOG_DEBUG_W( "[snp-pkt] tlv type %u len %u mismatch! %s", tlv[0].type, tlv[0].len, FD_SNP_LOG_CONN( conn ) );
+        return -1;
+      }
+      off = fd_snp_tlv_extract_fast( packet, off, tlv );
+    } while( tlv[0].type==FD_SNP_FRAME_MAX_DATA );
+    conn->last_recv_ts = fd_snp_timestamp_ms();
+    return 0;
+  }
+
+  /* Process any other packet. */
   if( FD_UNLIKELY( !fd_snp_has_enough_flow_rx_credit( snp, conn ) ) ) {
     FD_SNP_LOG_DEBUG_W( "[snp-verify] unable to verify snp pkt due to insufficient flow rx credits %s", FD_SNP_LOG_CONN( conn ) );
     return -1;
@@ -599,7 +638,7 @@ fd_snp_send_ping( fd_snp_t *      snp,
 
   ulong packet_sz = 0 + data_offset + 19;
   fd_snp_meta_t meta = conn->peer_addr | FD_SNP_META_PROTO_V1;
-  return fd_snp_finalize_snp_and_invoke_tx_cb( snp, conn, packet, packet_sz, meta | FD_SNP_META_OPT_BUFFERED );
+  return fd_snp_finalize_snp_and_invoke_tx_cb( snp, conn, packet, packet_sz, meta | FD_SNP_META_OPT_BUFFERED, 0/*flow_tx_credit_bypass*/ );
 }
 
 static inline int
@@ -642,7 +681,7 @@ fd_snp_pkt_pool_process(
       /* ignore return from callbacks for cached packets */
       FD_PARAM_UNUSED int res = 0;
       if( ele->send==1 ) {
-        res = fd_snp_finalize_snp_and_invoke_tx_cb( snp, conn, buf, buf_sz, meta_buffered );
+        res = fd_snp_finalize_snp_and_invoke_tx_cb( snp, conn, buf, buf_sz, meta_buffered, 0/*flow_tx_credit_bypass*/ );
       } else {
         res = fd_snp_verify_snp_and_invoke_rx_cb( snp, conn, buf, buf_sz, meta_buffered );
       }
@@ -662,13 +701,19 @@ fd_snp_send_flow_rx_wmark_packet( fd_snp_t *      snp,
                                   fd_snp_conn_t * conn ) {
   uchar packet[1514];
   const ulong off = sizeof(fd_ip4_udp_hdrs_t) + sizeof(snp_hdr_t);
-  const ulong packet_sz = off + (1UL+2UL+8UL)/*tlv with wmark*/ + (1UL+2UL+16UL)/*hmac*/;
+  const ulong packet_sz = off + (1UL+2UL+8UL)/*tlv with wmark */ + (1UL+2UL+8UL+8UL)/*tlv with wmark and level */ + (1UL+2UL+16UL)/*hmac*/;
   fd_snp_meta_t meta = conn->peer_addr | FD_SNP_META_PROTO_V1;
-  packet [off+0UL ] = FD_SNP_FRAME_MAX_DATA;
-  packet [off+1UL ] = 8U;
-  packet [off+2UL ] = 0U;
-  fd_memcpy( packet + off + 3UL, &conn->flow_rx_wmark, sizeof(long) );
-  return fd_snp_finalize_snp_and_invoke_tx_cb( snp, conn, packet, packet_sz, meta | FD_SNP_META_OPT_BUFFERED );
+  /* backward compatible format */
+  packet [off + 0UL ] = FD_SNP_FRAME_MAX_DATA;
+  FD_STORE( ushort, packet + off + 1UL, 8U );
+  FD_STORE(   long, packet + off + 3UL, conn->flow_rx_wmark );
+  /* new format */
+  packet [off + 11UL ] = FD_SNP_FRAME_MAX_DATA;
+  FD_STORE( ushort, packet + off + 12UL, 16U );
+  FD_STORE(   long, packet + off + 14UL, conn->flow_rx_wmark );
+  FD_STORE(   long, packet + off + 22UL, conn->flow_rx_level );
+  conn->flow_rx_wmark_tstamp = fd_snp_timestamp_ms();
+  return fd_snp_finalize_snp_and_invoke_tx_cb( snp, conn, packet, packet_sz, meta | FD_SNP_META_OPT_BUFFERED, 1/*flow_tx_credit_bypass*/ );
 }
 
 static inline void
@@ -742,7 +787,7 @@ fd_snp_send( fd_snp_t *    snp,
       return fd_snp_finalize_multicast_and_invoke_tx_cb( snp, conn, packet, packet_sz, meta );
     }
     FD_SNP_LOG_TRACE( "[snp-send] SNP send %s", FD_SNP_LOG_CONN( conn ) );
-    return fd_snp_finalize_snp_and_invoke_tx_cb( snp, conn, packet, packet_sz, meta );
+    return fd_snp_finalize_snp_and_invoke_tx_cb( snp, conn, packet, packet_sz, meta, 0/*flow_tx_credit_bypass*/ );
   } /* else is implicit */
 
   /* 5. If we don't have a connection, create a new connection */
@@ -870,25 +915,6 @@ fd_snp_process_packet( fd_snp_t * snp,
 
     /* R3. (likely case) conn established + validate integrity, accept */
     if( FD_LIKELY( conn->state==FD_SNP_TYPE_HS_DONE ) ) {
-      tlv_meta_t tlv[1];
-      fd_snp_tlv_extract( packet, sizeof(fd_ip4_udp_hdrs_t)+sizeof(snp_hdr_t) /*offset*/, tlv );
-      /* This assumes that every wmark update is sent in a separate packet. */
-      if( FD_UNLIKELY( tlv[0].type==FD_SNP_FRAME_MAX_DATA ) ) {
-        if( FD_UNLIKELY( tlv[0].len!=8U ) ) {
-          FD_SNP_LOG_DEBUG_W( "[snp-pkt] tlv type %u len %u mismatch! %s", tlv[0].type, tlv[0].len, FD_SNP_LOG_CONN( conn ) );
-          return -1;
-        }
-        int res = fd_snp_v1_validate_packet( conn, packet+sizeof(fd_ip4_udp_hdrs_t), packet_sz-sizeof(fd_ip4_udp_hdrs_t) );
-        if( FD_UNLIKELY( res < 0 ) ) {
-          FD_SNP_LOG_DEBUG_W( "[snp-pkt] tlv type %u fd_snp_v1_validate_packet failed with res %d %s", tlv[0].type, res, FD_SNP_LOG_CONN( conn ) );
-          return -1;
-        }
-        long wmark = (long)tlv[0].u64;
-        FD_SNP_LOG_TRACE( "[snp-pkt] tlv type %u previous wmark %ld new wmark %ld %s", tlv[0].type, conn->flow_tx_wmark, wmark, FD_SNP_LOG_CONN( conn ) );
-        conn->flow_tx_wmark = wmark;
-        conn->last_recv_ts = fd_snp_timestamp_ms();
-        return 0;
-      }
       return fd_snp_verify_snp_and_invoke_rx_cb( snp, conn, packet, packet_sz, meta );
     }
 
@@ -1075,6 +1101,7 @@ fd_snp_housekeeping( fd_snp_t * snp ) {
 #define FD_SNP_KEEP_ALIVE_MS       (4000L)
 #define FD_SNP_TIMEOUT_MS          (FD_SNP_KEEP_ALIVE_MS * 3L + 1000L)
 #define FD_SNP_DEST_META_UPDATE_MS (12000L)
+#define FD_SNP_FLOW_RX_WMARK_MS    (4000L)
 
   long now = fd_snp_timestamp_ms();
   for( ; idx<max && used_ele<used; idx++, conn++ ) {
@@ -1125,11 +1152,6 @@ fd_snp_housekeeping( fd_snp_t * snp ) {
 
         continue;
       }
-      if( now > conn->last_sent_ts + FD_SNP_KEEP_ALIVE_MS ) {
-        FD_SNP_LOG_TRACE( "[snp-hkp] keep alive - pinging %s", FD_SNP_LOG_CONN( conn ) );
-        fd_snp_send_ping( snp, conn );
-        continue;
-      }
       /* Flow rx watermark is updated when flow rx level nears the
          watermark by half the flow rx allocation.  This is arbitrary,
          and it tries to minimize credit starvation and the number of
@@ -1149,25 +1171,57 @@ fd_snp_housekeeping( fd_snp_t * snp ) {
         FD_SNP_LOG_TRACE( "[snp-hkp] updating flow rx wmark from %ld to %ld for %s level %ld", conn->flow_rx_wmark, wmark, FD_SNP_LOG_CONN( conn ), conn->flow_rx_level );
         conn->flow_rx_wmark = wmark;
         fd_snp_send_flow_rx_wmark_packet( snp, conn );
+        continue;
+      } else {
+        if( FD_UNLIKELY( now > conn->flow_rx_wmark_tstamp + FD_SNP_FLOW_RX_WMARK_MS ) ) {
+          FD_SNP_LOG_TRACE( "[snp-hkp] fd_snp_send_flow_rx_wmark_packet at tstamp %016lx for %s", (ulong)conn->flow_rx_wmark_tstamp, FD_SNP_LOG_CONN( conn ) );
+          fd_snp_send_flow_rx_wmark_packet( snp, conn );
+          continue;
+        }
+      }
+      if( now > conn->last_sent_ts + FD_SNP_KEEP_ALIVE_MS ) {
+        FD_SNP_LOG_TRACE( "[snp-hkp] keep alive - pinging %s", FD_SNP_LOG_CONN( conn ) );
+        fd_snp_send_ping( snp, conn );
+        continue;
       }
     }
   }
 
+  /* dest_meta_update and handshake retriggering. */
   if( now > snp->dest_meta_next_update_ts + FD_SNP_DEST_META_UPDATE_MS ) {
     fd_snp_dest_meta_map_t * curr_map = snp->dest_meta_map;
     fd_snp_dest_meta_map_t * next_map = curr_map==snp->dest_meta_map_a ? snp->dest_meta_map_b : snp->dest_meta_map_a;
     /* swap dest_meta_map and clone unexpired entries */
     snp->dest_meta_map = next_map;
-    for( ulong i=0; i < fd_snp_dest_meta_map_slot_cnt( curr_map ); i++ ) {
+    ulong slot_cnt = fd_snp_dest_meta_map_slot_cnt( curr_map );
+    ulong key_cnt  = fd_snp_dest_meta_map_key_cnt( curr_map );
+    ulong key_i    = 0UL;
+    for( ulong i=0; i < slot_cnt && key_i < key_cnt; i++ ) {
       fd_snp_dest_meta_map_t * curr_entry = &curr_map[i];
       if( !fd_snp_dest_meta_map_key_equal( curr_entry->key, fd_snp_dest_meta_map_key_null() ) ) {
-        /* clone current map's entry into next map's entry, excluding older ones. */
+        /* clone current map's entry into next map's entry,
+           excluding older ones. */
         if( curr_entry->val.update_idx == snp->dest_meta_update_idx ) {
+          /* update next_entry */
           fd_snp_dest_meta_map_t * next_entry = fd_snp_dest_meta_map_insert( next_map, curr_entry->key );
           next_entry->val = curr_entry->val;
+          /* check if a handshake needs to be retriggered. */
+          if( FD_UNLIKELY( ( !!next_entry->val.snp_available ) &&
+                           (  !next_entry->val.snp_enabled   ) &&
+                           ( now > next_entry->val.snp_handshake_tstamp + FD_SNP_DEST_META_UPDATE_MS ) ) ) {
+            fd_snp_meta_t meta = fd_snp_meta_from_parts( FD_SNP_META_PROTO_V1, 0/*app_id*/, next_entry->val.ip4_addr, next_entry->val.udp_port );
+            uchar packet[ FD_SNP_MTU ] = { 0 };
+            FD_SNP_LOG_TRACE( "[snp-hsk] retry handshake at tstamp %016lx for %s", (ulong)next_entry->val.snp_handshake_tstamp, FD_SNP_LOG_CONN( conn ) );
+            fd_snp_send( snp, packet, 0/*packet_sz*/, meta | FD_SNP_META_OPT_BUFFERED );
+            /* randomly set the handshake timestamp, to prevent all entries from
+               triggering at the same time in upcoming housekeeping(s).  The rng
+               yields a ushort, in the range of [0, 65536) ms. */
+            next_entry->val.snp_handshake_tstamp = now + (long)( fd_rng_ushort( snp->rng ) );
+          }
         }
         /* manually reset current map's entry, avoiding fd_snp_dest_meta_map_clear() overhead. */
         curr_entry->key = fd_snp_dest_meta_map_key_null();
+        key_i += 1UL;
       }
     }
 

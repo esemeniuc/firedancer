@@ -94,6 +94,10 @@ typedef struct {
   ulong            packet_sz;
   fd_snp_t *       snp;
 
+  /* SNP enforced destinations */
+  ulong            enforced_cnt;
+  ulong            enforced[ FD_TOPO_ADTL_DESTS_MAX ];
+
   /* App-specific */
   ulong            shred_cnt;
 
@@ -207,10 +211,10 @@ handle_new_cluster_contact_info( fd_snp_tile_ctx_t * ctx,
     if( FD_UNLIKELY( !entry->key ) ) {
       entry = fd_snp_dest_meta_map_insert( ctx->snp->dest_meta_map, key );
       if( !entry ) continue;
+      memset( &entry->val, 0, sizeof(fd_snp_dest_meta_t) );
       entry->val.ip4_addr      = ip4_addr;
       entry->val.udp_port      = udp_port;
       entry->val.snp_available = snp_available;
-      entry->val.snp_enabled   = 0;
       is_new = 1;
     }
 
@@ -230,12 +234,15 @@ handle_new_cluster_contact_info( fd_snp_tile_ctx_t * ctx,
     if( FD_UNLIKELY( !!is_new || !!has_changed ) ) {
       entry->val.snp_available = snp_available;
       entry->val.snp_enabled   = 0;
-      if( FD_UNLIKELY( !!snp_available ) ) {
-        fd_snp_meta_t meta = fd_snp_meta_from_parts( FD_SNP_META_PROTO_V1, 0/*app_id*/, ip4_addr, udp_port );
-        void * mock_pkt = fd_chunk_to_laddr( ctx->net_out_mem, ctx->net_out_chunk );
-        fd_snp_send( ctx->snp, mock_pkt, 0/*packet_sz*/, meta );
-        ctx->net_out_chunk = fd_dcache_compact_next( ctx->net_out_chunk, FD_SNP_MTU, ctx->net_out_chunk0, ctx->net_out_wmark );
-      }
+      /* force a handshake if snp_available. */
+      entry->val.snp_handshake_tstamp = 0;
+    }
+  }
+  for( ulong i=0UL; i<ctx->enforced_cnt; i++ ) {
+    fd_snp_dest_meta_map_t sentinel = { 0 };
+    fd_snp_dest_meta_map_t * entry = fd_snp_dest_meta_map_query( ctx->snp->dest_meta_map, ctx->enforced[ i ], &sentinel );
+    if( FD_LIKELY( !entry->key ) ) {
+      entry->val.snp_enabled = 1;
     }
   }
   /* metrics */
@@ -645,6 +652,13 @@ unprivileged_init( fd_topo_t *      topo,
   ctx->shred_cnt = 0UL;
 
   ctx->packet = NULL;
+
+  ctx->enforced_cnt = tile->snp.enforced_destinations_cnt;
+  for( ulong i=0UL; i<tile->snp.enforced_destinations_cnt; i++ ) {
+    uint   ip4_addr = tile->snp.enforced_destinations[ i ].ip;
+    ushort udp_port = tile->snp.enforced_destinations[ i ].port;
+    ctx->enforced[ i ] = fd_snp_dest_meta_map_key_from_parts( ip4_addr, udp_port );
+  }
 
   fd_histf_join( fd_histf_new( ctx->metrics->contact_info_cnt, FD_MHIST_MIN( SNP, CLUSTER_CONTACT_INFO_CNT ),
                                                                FD_MHIST_MAX( SNP, CLUSTER_CONTACT_INFO_CNT ) ) );

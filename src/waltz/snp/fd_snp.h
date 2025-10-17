@@ -71,8 +71,9 @@ struct fd_snp_applications {
 };
 typedef struct fd_snp_applications fd_snp_applications_t;
 
-struct __attribute__((aligned(16))) fd_snp_dest_meta {
+struct fd_snp_dest_meta {
   ulong  update_idx;
+  long   snp_handshake_tstamp;
   uint   ip4_addr;
   ushort udp_port;
   uchar  snp_available;
@@ -82,7 +83,6 @@ typedef struct fd_snp_dest_meta fd_snp_dest_meta_t;
 
 struct __attribute__((aligned(16))) fd_snp_dest_meta_map {
   ulong              key;
-  ulong              padding;
   fd_snp_dest_meta_t val;
 };
 typedef struct fd_snp_dest_meta_map fd_snp_dest_meta_map_t;
@@ -127,6 +127,9 @@ struct FD_SNP_ALIGNED fd_snp {
   fd_snp_dest_meta_map_t * dest_meta_map;
   ulong                    dest_meta_update_idx;
   long                     dest_meta_next_update_ts;
+
+  fd_rng_t      rng_mem[ 1 ];
+  fd_rng_t *    rng;
 };
 typedef struct fd_snp fd_snp_t;
 

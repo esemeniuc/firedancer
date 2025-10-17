@@ -273,8 +273,10 @@ struct fd_topo_tile {
     } shred;
 
     struct {
-      ulong depth; /* TODO expand */
-      char identity_key_path[ PATH_MAX ];
+      ulong             depth;
+      char              identity_key_path[ PATH_MAX ];
+      ulong             enforced_destinations_cnt;
+      fd_topo_ip_port_t enforced_destinations[ FD_TOPO_ADTL_DESTS_MAX ];
     } snp;
 
     struct {

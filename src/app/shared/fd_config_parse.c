@@ -276,6 +276,7 @@ fd_config_extract_pod( uchar *       pod,
   }
 
   CFG_POP      ( bool,   tiles.snp.enabled                                );
+  CFG_POP_ARRAY( cstr,   tiles.snp.enforced_destinations                  );
 
   CFG_POP      ( bool,   development.sandbox                              );
   CFG_POP      ( bool,   development.no_clone                             );

@@ -150,6 +150,7 @@ struct FD_SNP_ALIGNED fd_snp_conn {
   long  flow_rx_alloc;
   long  flow_rx_level;
   long  flow_rx_wmark;
+  long  flow_rx_wmark_tstamp;
   long  flow_tx_level;
   long  flow_tx_wmark;
 
