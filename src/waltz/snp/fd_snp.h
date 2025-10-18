@@ -72,16 +72,18 @@ struct fd_snp_applications {
 typedef struct fd_snp_applications fd_snp_applications_t;
 
 struct fd_snp_dest_meta {
-  ulong  update_idx;
   long   snp_handshake_tstamp;
+  uint   update_idx;
   uint   ip4_addr;
   ushort udp_port;
   uchar  snp_available;
   uchar  snp_enabled;
+  uchar  snp_enforced;
+  uchar  reserved[3];
 };
 typedef struct fd_snp_dest_meta fd_snp_dest_meta_t;
 
-struct __attribute__((aligned(16))) fd_snp_dest_meta_map {
+struct __attribute__((aligned(32))) fd_snp_dest_meta_map {
   ulong              key;
   fd_snp_dest_meta_t val;
 };
@@ -94,6 +96,38 @@ typedef struct fd_snp_dest_meta_map fd_snp_dest_meta_map_t;
 #define MAP_KEY_HASH(k) (k)
 #include "../../util/tmpl/fd_map_dynamic.c"
 
+struct fd_snp_metrics {
+  ulong   dest_meta_cnt;
+  ulong   dest_meta_snp_available_cnt;
+  ulong   dest_meta_snp_enabled_cnt;
+
+  ulong   conn_cur_total;                /* pool cnt. */
+  ulong   conn_cur_established;          /* current number of active connections. */
+  ulong   conn_acc_total;                /* incr every time we create a connections. */
+  ulong   conn_acc_established;          /* incr every time we complete a handshake. */
+  ulong   conn_acc_dropped;              /* incr every time we delete a connection. */
+  ulong   conn_acc_dropped_handshake;    /* incr every time we delete a handshake connection. */
+  ulong   conn_acc_dropped_established;  /* incr every time we delete an established connection. */
+  ulong   conn_acc_dropped_set_identity; /* incr every time we delete a connection due to set identity. */
+
+  ulong   tx_bytes_via_udp_to_snp_avail_cnt;
+  ulong   tx_pkts_via_udp_to_snp_avail_cnt;
+
+  ulong   tx_bytes_via_udp_cnt;
+  ulong   tx_bytes_via_snp_cnt;
+  ulong   tx_pkts_via_udp_cnt;
+  ulong   tx_pkts_via_snp_cnt;
+  ulong   tx_pkts_dropped_no_credits_cnt;
+
+  ulong   rx_bytes_cnt;
+  ulong   rx_bytes_via_udp_cnt;
+  ulong   rx_bytes_via_snp_cnt;
+  ulong   rx_pkts_cnt;
+  ulong   rx_pkts_via_udp_cnt;
+  ulong   rx_pkts_via_snp_cnt;
+  ulong   rx_pkts_dropped_no_credits_cnt;
+};
+typedef struct fd_snp_metrics fd_snp_metrics_t;
 
 struct FD_SNP_ALIGNED fd_snp {
   ulong magic;   /* ==FD_SNP_MAGIC */
@@ -125,11 +159,15 @@ struct FD_SNP_ALIGNED fd_snp {
   fd_snp_dest_meta_map_t * dest_meta_map_a;
   fd_snp_dest_meta_map_t * dest_meta_map_b;
   fd_snp_dest_meta_map_t * dest_meta_map;
-  ulong                    dest_meta_update_idx;
+  uint                     dest_meta_update_idx;
   long                     dest_meta_next_update_ts;
 
   fd_rng_t      rng_mem[ 1 ];
   fd_rng_t *    rng;
+
+  /* Metrics */
+  fd_snp_metrics_t metrics_all[1];
+  fd_snp_metrics_t metrics_enf[1];
 };
 typedef struct fd_snp fd_snp_t;
 

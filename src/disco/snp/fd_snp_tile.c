@@ -101,22 +101,6 @@ typedef struct {
   /* App-specific */
   ulong            shred_cnt;
 
-  /* Metrics */
-  struct {
-    fd_histf_t contact_info_cnt[ 1 ];
-    ulong      dest_meta_cnt;
-    ulong      snp_avail_cnt;
-    ulong      snp_conn_cnt;
-    ulong      tx_bytes_via_udp_cnt;
-    ulong      tx_bytes_via_snp_cnt;
-    ulong      tx_pkts_via_udp_cnt;
-    ulong      tx_pkts_via_snp_cnt;
-    ulong      rx_bytes_via_udp_cnt;
-    ulong      rx_bytes_via_snp_cnt;
-    ulong      rx_pkts_via_udp_cnt;
-    ulong      rx_pkts_via_snp_cnt;
-  } metrics[ 1 ];
-
   fd_stem_context_t * stem;
 
   fd_snp_app_t * snp_app;
@@ -157,16 +141,12 @@ during_housekeeping( fd_snp_tile_ctx_t * ctx ) {
   /* SNP housekeeping */
   fd_snp_housekeeping( ctx->snp );
 
-  /* metrics */
-  ctx->metrics->dest_meta_cnt = fd_snp_dest_meta_map_key_cnt( ctx->snp->dest_meta_map );
-  ctx->metrics->snp_conn_cnt  = fd_snp_conn_pool_used( ctx->snp->conn_pool );
-
 #if FD_SNP_DEBUG_ENABLED
   /* SNP logged metrics. */
   static long snp_next_metrics_log = 0L;
   long now = fd_snp_timestamp_ms();
   if( now > snp_next_metrics_log ) {
-    FD_LOG_NOTICE(( "[SNP] contacts=%lu connections=%lu", ctx->metrics->dest_meta_cnt, ctx->metrics->snp_conn_cnt ));
+    FD_LOG_NOTICE(( "[SNP] contacts=%lu connections=%lu", fd_snp_dest_meta_map_key_cnt( ctx->snp->dest_meta_map ), fd_snp_conn_pool_used( ctx->snp->conn_pool ) ));
     snp_next_metrics_log = now + 10000L; /* Every 10 seconds. */
   }
 #endif
@@ -188,9 +168,7 @@ handle_new_cluster_contact_info( fd_snp_tile_ctx_t * ctx,
   ctx->new_dest_ptr = dests;
   ctx->new_dest_cnt = dest_cnt;
 
-  ctx->snp->dest_meta_update_idx += 1UL;
-
-  ulong snp_available_cnt = 0UL;
+  ctx->snp->dest_meta_update_idx += 1U;
 
   for( ulong i=0UL; i<dest_cnt; i++ ) {
     memcpy( dests[i].pubkey.uc, in_dests[i].pubkey, 32UL );
@@ -201,7 +179,6 @@ handle_new_cluster_contact_info( fd_snp_tile_ctx_t * ctx,
     dests[i].port = udp_port;
 
     uchar snp_available = (in_dests[i].version_minor >= SNP_MIN_FDCTL_MINOR_VERSION) ? 1U : 0U;
-    snp_available_cnt += (ulong)snp_available;
 
     ulong key = fd_snp_dest_meta_map_key_from_parts( ip4_addr, udp_port );
     fd_snp_dest_meta_map_t sentinel = { 0 };
@@ -241,13 +218,11 @@ handle_new_cluster_contact_info( fd_snp_tile_ctx_t * ctx,
   for( ulong i=0UL; i<ctx->enforced_cnt; i++ ) {
     fd_snp_dest_meta_map_t sentinel = { 0 };
     fd_snp_dest_meta_map_t * entry = fd_snp_dest_meta_map_query( ctx->snp->dest_meta_map, ctx->enforced[ i ], &sentinel );
-    if( FD_LIKELY( !entry->key ) ) {
+    if( FD_LIKELY( !!entry->key ) ) {
       entry->val.snp_enabled = 1;
+      entry->val.snp_enforced = 1;
     }
   }
-  /* metrics */
-  fd_histf_sample( ctx->metrics->contact_info_cnt, dest_cnt );
-  ctx->metrics->snp_avail_cnt = snp_available_cnt;
 }
 
 static inline void
@@ -257,21 +232,59 @@ finalize_new_cluster_contact_info( fd_snp_tile_ctx_t * ctx ) {
 
 static inline void
 metrics_write( fd_snp_tile_ctx_t * ctx ) {
-  FD_MHIST_COPY( SNP, CLUSTER_CONTACT_INFO_CNT, ctx->metrics->contact_info_cnt );
+  /* All */
+  FD_MCNT_SET  ( SNP, ALL_DEST_META_CNT,                      ctx->snp->metrics_all->dest_meta_cnt                     );
+  FD_MCNT_SET  ( SNP, ALL_DEST_META_SNP_AVAILABLE_CNT,        ctx->snp->metrics_all->dest_meta_snp_available_cnt       );
+  FD_MCNT_SET  ( SNP, ALL_DEST_META_SNP_ENABLED_CNT,          ctx->snp->metrics_all->dest_meta_snp_enabled_cnt         );
+  FD_MCNT_SET  ( SNP, ALL_CONN_CUR_TOTAL,                     ctx->snp->metrics_all->conn_cur_total                    );
+  FD_MCNT_SET  ( SNP, ALL_CONN_CUR_ESTABLISHED,               ctx->snp->metrics_all->conn_cur_established              );
+  FD_MCNT_SET  ( SNP, ALL_CONN_ACC_TOTAL,                     ctx->snp->metrics_all->conn_acc_total                    );
+  FD_MCNT_SET  ( SNP, ALL_CONN_ACC_ESTABLISHED,               ctx->snp->metrics_all->conn_acc_established              );
+  FD_MCNT_SET  ( SNP, ALL_CONN_ACC_DROPPED,                   ctx->snp->metrics_all->conn_acc_dropped                  );
+  FD_MCNT_SET  ( SNP, ALL_CONN_ACC_DROPPED_HANDSHAKE,         ctx->snp->metrics_all->conn_acc_dropped_handshake        );
+  FD_MCNT_SET  ( SNP, ALL_CONN_ACC_DROPPED_ESTABLISHED,       ctx->snp->metrics_all->conn_acc_dropped_established      );
+  FD_MCNT_SET  ( SNP, ALL_CONN_ACC_DROPPED_SET_IDENTITY,      ctx->snp->metrics_all->conn_acc_dropped_set_identity     );
+  FD_MCNT_SET  ( SNP, ALL_TX_BYTES_VIA_UDP_TO_SNP_AVAIL_CNT,  ctx->snp->metrics_all->tx_bytes_via_udp_to_snp_avail_cnt );
+  FD_MCNT_SET  ( SNP, ALL_TX_PKTS_VIA_UDP_TO_SNP_AVAIL_CNT,   ctx->snp->metrics_all->tx_pkts_via_udp_to_snp_avail_cnt  );
+  FD_MCNT_SET  ( SNP, ALL_TX_BYTES_VIA_UDP_CNT,               ctx->snp->metrics_all->tx_bytes_via_udp_cnt              );
+  FD_MCNT_SET  ( SNP, ALL_TX_BYTES_VIA_SNP_CNT,               ctx->snp->metrics_all->tx_bytes_via_snp_cnt              );
+  FD_MCNT_SET  ( SNP, ALL_TX_PKTS_VIA_UDP_CNT,                ctx->snp->metrics_all->tx_pkts_via_udp_cnt               );
+  FD_MCNT_SET  ( SNP, ALL_TX_PKTS_VIA_SNP_CNT,                ctx->snp->metrics_all->tx_pkts_via_snp_cnt               );
+  FD_MCNT_SET  ( SNP, ALL_TX_PKTS_DROPPED_NO_CREDITS_CNT,     ctx->snp->metrics_all->tx_pkts_dropped_no_credits_cnt    );
+  FD_MCNT_SET  ( SNP, ALL_RX_BYTES_CNT,                       ctx->snp->metrics_all->rx_bytes_cnt                      );
+  FD_MCNT_SET  ( SNP, ALL_RX_BYTES_VIA_UDP_CNT,               ctx->snp->metrics_all->rx_bytes_via_udp_cnt              );
+  FD_MCNT_SET  ( SNP, ALL_RX_BYTES_VIA_SNP_CNT,               ctx->snp->metrics_all->rx_bytes_via_snp_cnt              );
+  FD_MCNT_SET  ( SNP, ALL_RX_PKTS_CNT,                        ctx->snp->metrics_all->rx_pkts_cnt                       );
+  FD_MCNT_SET  ( SNP, ALL_RX_PKTS_VIA_UDP_CNT,                ctx->snp->metrics_all->rx_pkts_via_udp_cnt               );
+  FD_MCNT_SET  ( SNP, ALL_RX_PKTS_VIA_SNP_CNT,                ctx->snp->metrics_all->rx_pkts_via_snp_cnt               );
+  FD_MCNT_SET  ( SNP, ALL_RX_PKTS_DROPPED_NO_CREDITS_CNT,     ctx->snp->metrics_all->rx_pkts_dropped_no_credits_cnt    );
 
-  FD_MCNT_SET  ( SNP, DEST_META_CNT,          ctx->metrics->dest_meta_cnt );
-  FD_MCNT_SET  ( SNP, SNP_AVAIL_CNT,          ctx->metrics->snp_avail_cnt );
-  FD_MCNT_SET  ( SNP, SNP_CONN_CNT,           ctx->metrics->snp_conn_cnt );
-
-  FD_MCNT_SET  ( SNP, TX_BYTES_VIA_UDP_CNT,   ctx->metrics->tx_bytes_via_udp_cnt );
-  FD_MCNT_SET  ( SNP, TX_BYTES_VIA_SNP_CNT,   ctx->metrics->tx_bytes_via_snp_cnt );
-  FD_MCNT_SET  ( SNP, TX_PKTS_VIA_UDP_CNT,    ctx->metrics->tx_pkts_via_udp_cnt  );
-  FD_MCNT_SET  ( SNP, TX_PKTS_VIA_SNP_CNT,    ctx->metrics->tx_pkts_via_snp_cnt  );
-
-  FD_MCNT_SET  ( SNP, RX_BYTES_VIA_UDP_CNT,   ctx->metrics->rx_bytes_via_udp_cnt );
-  FD_MCNT_SET  ( SNP, RX_BYTES_VIA_SNP_CNT,   ctx->metrics->rx_bytes_via_snp_cnt );
-  FD_MCNT_SET  ( SNP, RX_PKTS_VIA_UDP_CNT,    ctx->metrics->rx_pkts_via_udp_cnt  );
-  FD_MCNT_SET  ( SNP, RX_PKTS_VIA_SNP_CNT,    ctx->metrics->rx_pkts_via_snp_cnt  );
+  /* Enforced */
+  FD_MCNT_SET  ( SNP, ENF_DEST_META_CNT,                      ctx->snp->metrics_enf->dest_meta_cnt                     );
+  FD_MCNT_SET  ( SNP, ENF_DEST_META_SNP_AVAILABLE_CNT,        ctx->snp->metrics_enf->dest_meta_snp_available_cnt       );
+  FD_MCNT_SET  ( SNP, ENF_DEST_META_SNP_ENABLED_CNT,          ctx->snp->metrics_enf->dest_meta_snp_enabled_cnt         );
+  FD_MCNT_SET  ( SNP, ENF_CONN_CUR_TOTAL,                     ctx->snp->metrics_enf->conn_cur_total                    );
+  FD_MCNT_SET  ( SNP, ENF_CONN_CUR_ESTABLISHED,               ctx->snp->metrics_enf->conn_cur_established              );
+  FD_MCNT_SET  ( SNP, ENF_CONN_ACC_TOTAL,                     ctx->snp->metrics_enf->conn_acc_total                    );
+  FD_MCNT_SET  ( SNP, ENF_CONN_ACC_ESTABLISHED,               ctx->snp->metrics_enf->conn_acc_established              );
+  FD_MCNT_SET  ( SNP, ENF_CONN_ACC_DROPPED,                   ctx->snp->metrics_enf->conn_acc_dropped                  );
+  FD_MCNT_SET  ( SNP, ENF_CONN_ACC_DROPPED_HANDSHAKE,         ctx->snp->metrics_enf->conn_acc_dropped_handshake        );
+  FD_MCNT_SET  ( SNP, ENF_CONN_ACC_DROPPED_ESTABLISHED,       ctx->snp->metrics_enf->conn_acc_dropped_established      );
+  FD_MCNT_SET  ( SNP, ENF_CONN_ACC_DROPPED_SET_IDENTITY,      ctx->snp->metrics_enf->conn_acc_dropped_set_identity     );
+  FD_MCNT_SET  ( SNP, ENF_TX_BYTES_VIA_UDP_TO_SNP_AVAIL_CNT,  ctx->snp->metrics_enf->tx_bytes_via_udp_to_snp_avail_cnt );
+  FD_MCNT_SET  ( SNP, ENF_TX_PKTS_VIA_UDP_TO_SNP_AVAIL_CNT,   ctx->snp->metrics_enf->tx_pkts_via_udp_to_snp_avail_cnt  );
+  FD_MCNT_SET  ( SNP, ENF_TX_BYTES_VIA_UDP_CNT,               ctx->snp->metrics_enf->tx_bytes_via_udp_cnt              );
+  FD_MCNT_SET  ( SNP, ENF_TX_BYTES_VIA_SNP_CNT,               ctx->snp->metrics_enf->tx_bytes_via_snp_cnt              );
+  FD_MCNT_SET  ( SNP, ENF_TX_PKTS_VIA_UDP_CNT,                ctx->snp->metrics_enf->tx_pkts_via_udp_cnt               );
+  FD_MCNT_SET  ( SNP, ENF_TX_PKTS_VIA_SNP_CNT,                ctx->snp->metrics_enf->tx_pkts_via_snp_cnt               );
+  FD_MCNT_SET  ( SNP, ENF_TX_PKTS_DROPPED_NO_CREDITS_CNT,     ctx->snp->metrics_enf->tx_pkts_dropped_no_credits_cnt    );
+  FD_MCNT_SET  ( SNP, ENF_RX_BYTES_CNT,                       ctx->snp->metrics_enf->rx_bytes_cnt                      );
+  FD_MCNT_SET  ( SNP, ENF_RX_BYTES_VIA_UDP_CNT,               ctx->snp->metrics_enf->rx_bytes_via_udp_cnt              );
+  FD_MCNT_SET  ( SNP, ENF_RX_BYTES_VIA_SNP_CNT,               ctx->snp->metrics_enf->rx_bytes_via_snp_cnt              );
+  FD_MCNT_SET  ( SNP, ENF_RX_PKTS_CNT,                        ctx->snp->metrics_enf->rx_pkts_cnt                       );
+  FD_MCNT_SET  ( SNP, ENF_RX_PKTS_VIA_UDP_CNT,                ctx->snp->metrics_enf->rx_pkts_via_udp_cnt               );
+  FD_MCNT_SET  ( SNP, ENF_RX_PKTS_VIA_SNP_CNT,                ctx->snp->metrics_enf->rx_pkts_via_snp_cnt               );
+  FD_MCNT_SET  ( SNP, ENF_RX_PKTS_DROPPED_NO_CREDITS_CNT,     ctx->snp->metrics_enf->rx_pkts_dropped_no_credits_cnt    );
 }
 
 static inline int
@@ -351,18 +364,6 @@ during_frag( fd_snp_tile_ctx_t * ctx,
       memcpy( ctx->packet, dcache_entry, sz );
       ctx->packet_sz = sz;
       ctx->sig = sig;
-
-      int is_snp = 0;
-      if( sz > 45
-          && *(dcache_entry + 42UL)=='S'
-          && *(dcache_entry + 43UL)=='N'
-          && *(dcache_entry + 44UL)=='P' ) {
-        is_snp = 1;
-      }
-      ctx->metrics->rx_bytes_via_udp_cnt += fd_ulong_if( is_snp, 0UL, sz );
-      ctx->metrics->rx_bytes_via_snp_cnt += fd_ulong_if( is_snp, sz, 0UL );
-      ctx->metrics->rx_pkts_via_udp_cnt  += fd_ulong_if( is_snp, 0UL, 1UL );
-      ctx->metrics->rx_pkts_via_snp_cnt  += fd_ulong_if( is_snp, 1UL, 0UL );
     } break;
 
     case IN_KIND_GOSSIP:
@@ -467,11 +468,6 @@ snp_callback_tx( void const *  _ctx,
   fd_stem_publish( ctx->stem, NET_OUT_IDX /*ctx->net_out_idx*/, sig, ctx->net_out_chunk, packet_sz, 0UL, ctx->tsorig, tspub );
   ctx->net_out_chunk = fd_dcache_compact_next( ctx->net_out_chunk, packet_sz, ctx->net_out_chunk0, ctx->net_out_wmark );
 
-  int is_snp = proto!=FD_SNP_META_PROTO_UDP;
-  ctx->metrics->tx_bytes_via_udp_cnt += fd_ulong_if( is_snp, 0UL, packet_sz );
-  ctx->metrics->tx_bytes_via_snp_cnt += fd_ulong_if( is_snp, packet_sz, 0UL );
-  ctx->metrics->tx_pkts_via_udp_cnt  += fd_ulong_if( is_snp, 0UL, 1UL );
-  ctx->metrics->tx_pkts_via_snp_cnt  += fd_ulong_if( is_snp, 1UL, 0UL );
   return FD_SNP_SUCCESS;
 }
 
@@ -659,20 +655,6 @@ unprivileged_init( fd_topo_t *      topo,
     ushort udp_port = tile->snp.enforced_destinations[ i ].port;
     ctx->enforced[ i ] = fd_snp_dest_meta_map_key_from_parts( ip4_addr, udp_port );
   }
-
-  fd_histf_join( fd_histf_new( ctx->metrics->contact_info_cnt, FD_MHIST_MIN( SNP, CLUSTER_CONTACT_INFO_CNT ),
-                                                               FD_MHIST_MAX( SNP, CLUSTER_CONTACT_INFO_CNT ) ) );
-  ctx->metrics->dest_meta_cnt        = 0UL;
-  ctx->metrics->snp_avail_cnt        = 0UL;
-  ctx->metrics->snp_conn_cnt         = 0UL;
-  ctx->metrics->tx_bytes_via_udp_cnt = 0UL;
-  ctx->metrics->tx_bytes_via_snp_cnt = 0UL;
-  ctx->metrics->tx_pkts_via_udp_cnt  = 0UL;
-  ctx->metrics->tx_pkts_via_snp_cnt  = 0UL;
-  ctx->metrics->rx_bytes_via_udp_cnt = 0UL;
-  ctx->metrics->rx_bytes_via_snp_cnt = 0UL;
-  ctx->metrics->rx_pkts_via_udp_cnt  = 0UL;
-  ctx->metrics->rx_pkts_via_snp_cnt  = 0UL;
 
   ulong scratch_top = FD_SCRATCH_ALLOC_FINI( l, 1UL );
   if( FD_UNLIKELY( scratch_top > (ulong)scratch + scratch_footprint( tile ) ) )

@@ -232,10 +232,13 @@ fd_snp_init( fd_snp_t * snp ) {
     return NULL;
   }
   snp->dest_meta_map   = snp->dest_meta_map_a;
-  snp->dest_meta_update_idx      = 0UL;
+  snp->dest_meta_update_idx      = 0U;
   snp->dest_meta_next_update_ts  = 0UL;
 
   snp->rng = fd_rng_join( fd_rng_new( snp->rng_mem, (uint)fd_tickcount() /*seed*/, 0UL ) );
+
+  memset( snp->metrics_all, 0, sizeof(fd_snp_metrics_t) );
+  memset( snp->metrics_enf, 0, sizeof(fd_snp_metrics_t) );
 
   return snp;
 }
@@ -323,10 +326,27 @@ fd_snp_conn_create( fd_snp_t * snp,
 
   conn->is_multicast = 0;
 
+  conn->snp_enabled  = 0;
+  conn->snp_enforced = 0;
+  ulong dest_meta_map_key = fd_snp_dest_meta_map_key_from_conn( conn );
+  fd_snp_dest_meta_map_t sentinel = { 0 };
+  fd_snp_dest_meta_map_t * dest_meta = fd_snp_dest_meta_map_query( snp->dest_meta_map, dest_meta_map_key, &sentinel );
+  if( !!entry->key ) {
+    conn->snp_enabled   = dest_meta->val.snp_enabled;
+    conn->snp_enforced  = dest_meta->val.snp_enforced;
+  }
+
   conn->last_sent_ts = fd_snp_timestamp_ms();
 
   /* init last_pkt */
   last_pkt->data_sz = 0;
+
+  /* metrics */
+  snp->metrics_all->conn_acc_total += 1UL;
+  if( !!conn->snp_enforced ) {
+    snp->metrics_enf->conn_cur_total += 1UL;
+    snp->metrics_enf->conn_acc_total += 1UL;
+  }
 
   return conn;
 
@@ -346,6 +366,15 @@ fd_snp_conn_delete( fd_snp_t * snp,
                     fd_snp_conn_t * conn ) {
   /* return taken flow credits to the pool. */
   snp->flow_cred_taken -= conn->flow_rx_alloc;
+
+  /* metrics */
+  snp->metrics_all->conn_cur_established   -= fd_ulong_if( conn->state==FD_SNP_TYPE_HS_DONE, 1UL, 0UL );
+  snp->metrics_all->conn_acc_dropped       += 1UL;
+  if( !!conn->snp_enforced ) {
+    snp->metrics_enf->conn_cur_total       -= 1UL;
+    snp->metrics_enf->conn_cur_established -= fd_ulong_if( conn->state==FD_SNP_TYPE_HS_DONE, 1UL, 0UL );
+    snp->metrics_enf->conn_acc_dropped     += 1UL;
+  }
 
   fd_snp_pkt_pool_ele_release( snp->last_pkt_pool, conn->last_pkt );
 
@@ -431,10 +460,11 @@ fd_snp_incr_flow_rx_level( fd_snp_t *      snp FD_PARAM_UNUSED,
 
 static inline int
 fd_snp_finalize_udp_and_invoke_tx_cb(
-  fd_snp_t *    snp,
-  uchar *       packet,
-  ulong         packet_sz,
-  fd_snp_meta_t meta
+  fd_snp_t *      snp,
+  uchar *         packet,
+  ulong           packet_sz,
+  fd_snp_meta_t   meta,
+  fd_snp_conn_t * opt_conn
 ) {
   if( FD_UNLIKELY( packet_sz==0 ) ) {
     return 0;
@@ -455,6 +485,23 @@ fd_snp_finalize_udp_and_invoke_tx_cb(
   hdr->udp->net_dport  = fd_ushort_bswap( dst_port );
   hdr->udp->net_len    = fd_ushort_bswap( (ushort)( packet_sz - sizeof(fd_ip4_udp_hdrs_t) + sizeof(fd_udp_hdr_t) ) );
 
+  if( !!opt_conn ) {
+    opt_conn->last_sent_ts = fd_snp_timestamp_ms();
+  }
+
+  /* metrics */
+  if( !!opt_conn ) {
+    snp->metrics_all->tx_bytes_via_snp_cnt += packet_sz;
+    snp->metrics_all->tx_pkts_via_snp_cnt  += 1UL;
+    if( !!opt_conn->snp_enforced ) {
+      snp->metrics_enf->tx_bytes_via_snp_cnt += packet_sz;
+      snp->metrics_enf->tx_pkts_via_snp_cnt  += 1UL;
+    }
+  } else {
+    snp->metrics_all->tx_bytes_via_udp_cnt += packet_sz;
+    snp->metrics_all->tx_pkts_via_udp_cnt  += 1UL;
+  }
+
   return snp->cb.tx ? snp->cb.tx( snp->cb.ctx, packet, packet_sz, meta ) : (int)packet_sz;
 }
 
@@ -471,13 +518,47 @@ fd_snp_finalize_snp_and_invoke_tx_cb(
     return 0;
   }
   if( FD_UNLIKELY( !flow_tx_credit_bypass && !fd_snp_has_enough_flow_tx_credit( snp, conn ) ) ) {
+    /* metrics */
+    snp->metrics_all->tx_pkts_dropped_no_credits_cnt += 1UL;
+    if( !!conn->snp_enforced ) {
+      snp->metrics_enf->tx_pkts_dropped_no_credits_cnt += 1UL;
+    }
     FD_SNP_LOG_DEBUG_W( "[snp-finalize] unable to send snp pkt due to insufficient flow tx credits %s", FD_SNP_LOG_CONN( conn ) );
     return -1;
   }
   fd_snp_incr_flow_tx_level( snp, conn, packet_sz );
   fd_snp_v1_finalize_packet( conn, packet+sizeof(fd_ip4_udp_hdrs_t), packet_sz-sizeof(fd_ip4_udp_hdrs_t) );
-  conn->last_sent_ts = fd_snp_timestamp_ms();
-  return fd_snp_finalize_udp_and_invoke_tx_cb( snp, packet, packet_sz, meta & (~FD_SNP_META_OPT_HANDSHAKE) );
+
+  return fd_snp_finalize_udp_and_invoke_tx_cb( snp, packet, packet_sz, meta & (~FD_SNP_META_OPT_HANDSHAKE), conn );
+}
+
+static inline void
+fd_snp_update_rx_metrics( fd_snp_t *      snp,
+                          ulong           packet_sz,
+                          fd_snp_meta_t   meta,
+                          fd_snp_conn_t * opt_conn ) {
+  if( !!opt_conn ) {
+    snp->metrics_all->rx_bytes_via_snp_cnt += packet_sz;
+    snp->metrics_all->rx_pkts_via_snp_cnt  += 1UL;
+    if( !!opt_conn->snp_enforced ) {
+      snp->metrics_enf->rx_bytes_via_snp_cnt += packet_sz;
+      snp->metrics_enf->rx_pkts_via_snp_cnt  += 1UL;
+    }
+  } else {
+    snp->metrics_all->rx_bytes_via_udp_cnt += packet_sz;
+    snp->metrics_all->rx_pkts_via_udp_cnt  += 1UL;
+
+    ulong dest_meta_map_key = fd_snp_dest_meta_map_key_from_meta( meta );
+    fd_snp_dest_meta_map_t sentinel = { 0 };
+    fd_snp_dest_meta_map_t * dest_meta = fd_snp_dest_meta_map_query( snp->dest_meta_map, dest_meta_map_key, &sentinel );
+    if( !!dest_meta->key ) {
+      if( !!dest_meta->val.snp_enforced ) {
+        /* This should never happen. */
+        snp->metrics_enf->rx_bytes_via_udp_cnt += packet_sz;
+        snp->metrics_enf->rx_pkts_via_udp_cnt  += 1UL;
+      }
+    }
+  }
 }
 
 static inline int
@@ -524,6 +605,11 @@ fd_snp_verify_snp_and_invoke_rx_cb(
 
   /* Process any other packet. */
   if( FD_UNLIKELY( !fd_snp_has_enough_flow_rx_credit( snp, conn ) ) ) {
+    /* metrics */
+    snp->metrics_all->rx_pkts_dropped_no_credits_cnt += 1UL;
+    if( !!conn->snp_enforced ) {
+      snp->metrics_enf->rx_pkts_dropped_no_credits_cnt += 1UL;
+    }
     FD_SNP_LOG_DEBUG_W( "[snp-verify] unable to verify snp pkt due to insufficient flow rx credits %s", FD_SNP_LOG_CONN( conn ) );
     return -1;
   }
@@ -533,9 +619,12 @@ fd_snp_verify_snp_and_invoke_rx_cb(
     FD_SNP_LOG_DEBUG_W( "[snp-verify] validate packet failed with res=%d %s", res, FD_SNP_LOG_CONN( conn ) );
     return res;
   }
+
   conn->last_recv_ts = fd_snp_timestamp_ms();
   ulong data_offset = sizeof(fd_ip4_udp_hdrs_t) + 12;
   if( FD_LIKELY( packet[data_offset]==FD_SNP_FRAME_DATAGRAM ) ) {
+    /* metrics */
+    fd_snp_update_rx_metrics( snp, packet_sz, meta, conn );
     return snp->cb.rx( snp->cb.ctx, packet, packet_sz, meta );
   } else if( FD_LIKELY( packet[data_offset]==FD_SNP_FRAME_PING ) ) {
     FD_SNP_LOG_DEBUG_N( "[snp] received PING %s", FD_SNP_LOG_CONN( conn ) );
@@ -604,7 +693,6 @@ fd_snp_cache_packet_for_retry( fd_snp_conn_t * conn,
   if( conn==NULL ) {
     return -1;
   }
-  conn->last_sent_ts = fd_snp_timestamp_ms();
   conn->retry_cnt = 0;
   memcpy( conn->last_pkt->data, packet, packet_sz );
   conn->last_pkt->data_sz = (ushort)packet_sz;
@@ -618,8 +706,7 @@ fd_snp_retry_cached_packet( fd_snp_t *      snp,
   uchar * packet = conn->last_pkt->data;
   ulong   packet_sz = conn->last_pkt->data_sz;
   fd_snp_meta_t meta = conn->last_pkt->meta;
-  conn->last_sent_ts = fd_snp_timestamp_ms();
-  return fd_snp_finalize_udp_and_invoke_tx_cb( snp, packet, packet_sz, meta | FD_SNP_META_OPT_BUFFERED );
+  return fd_snp_finalize_udp_and_invoke_tx_cb( snp, packet, packet_sz, meta | FD_SNP_META_OPT_BUFFERED, conn );
 }
 
 int
@@ -771,7 +858,27 @@ fd_snp_send( fd_snp_t *    snp,
   ulong proto = meta & FD_SNP_META_PROTO_MASK;
   if( FD_LIKELY( proto==FD_SNP_META_PROTO_UDP ) ) {
     FD_SNP_LOG_TRACE( "[snp-send] UDP send" );
-    return fd_snp_finalize_udp_and_invoke_tx_cb( snp, packet, packet_sz, meta );
+    /* metrics */
+    ulong dest_meta_map_key = fd_snp_dest_meta_map_key_from_meta( meta );
+    fd_snp_dest_meta_map_t sentinel = { 0 };
+    fd_snp_dest_meta_map_t * dest_meta = fd_snp_dest_meta_map_query( snp->dest_meta_map, dest_meta_map_key, &sentinel );
+    if( !!dest_meta->key ) {
+      if( !!dest_meta->val.snp_enforced ) {
+        /* This should never happen.  It would indicate an error. */
+        snp->metrics_enf->tx_bytes_via_udp_cnt += packet_sz;
+        snp->metrics_enf->tx_pkts_via_udp_cnt  += 1UL;
+      }
+      if( !!dest_meta->val.snp_available ) {
+        snp->metrics_all->tx_bytes_via_udp_to_snp_avail_cnt += packet_sz;
+        snp->metrics_all->tx_pkts_via_udp_to_snp_avail_cnt  += 1UL;
+        if( !!dest_meta->val.snp_enforced ) {
+          /* This should never happen.  It would indicate an error. */
+          snp->metrics_enf->tx_bytes_via_udp_to_snp_avail_cnt += packet_sz;
+          snp->metrics_enf->tx_pkts_via_udp_to_snp_avail_cnt  += 1UL;
+        }
+      }
+    }
+    return fd_snp_finalize_udp_and_invoke_tx_cb( snp, packet, packet_sz, meta, NULL );
   }
 
   /* 3. Query connection by peer (meta) */
@@ -828,7 +935,7 @@ fd_snp_send( fd_snp_t *    snp,
   FD_SNP_LOG_DEBUG_N( "[snp-send] SNP send hs1 %s", FD_SNP_LOG_CONN( conn ) );
   packet_sz = (ulong)sz + sizeof(fd_ip4_udp_hdrs_t);
   fd_snp_cache_packet_for_retry( conn, packet, packet_sz, meta | FD_SNP_META_OPT_HANDSHAKE );
-  return fd_snp_finalize_udp_and_invoke_tx_cb( snp, packet, packet_sz, meta | FD_SNP_META_OPT_HANDSHAKE );
+  return fd_snp_finalize_udp_and_invoke_tx_cb( snp, packet, packet_sz, meta | FD_SNP_META_OPT_HANDSHAKE, conn );
 }
 
 /* Workflow:
@@ -863,6 +970,19 @@ fd_snp_process_packet( fd_snp_t * snp,
   ushort src_port = fd_ushort_bswap( hdr->udp->net_sport );
   ushort dst_port = fd_ushort_bswap( hdr->udp->net_dport );
 
+  /* metrics */
+  snp->metrics_all->rx_bytes_cnt += packet_sz;
+  snp->metrics_all->rx_pkts_cnt  += 1UL;
+  fd_snp_dest_meta_map_t sentinel = { 0 };
+  fd_snp_dest_meta_map_t * dest_meta = fd_snp_dest_meta_map_query( snp->dest_meta_map,
+    fd_snp_dest_meta_map_key_from_meta( fd_snp_meta_from_parts( 0, 0, src_ip, src_port ) ), &sentinel );
+  if( !!dest_meta->key ) {
+    if( !!dest_meta->val.snp_enforced ) {
+      snp->metrics_enf->rx_bytes_cnt += packet_sz;
+      snp->metrics_enf->rx_pkts_cnt  += 1UL;
+    }
+  }
+
   uchar snp_app_id;
   for( snp_app_id=0U; snp_app_id<snp->apps_cnt; snp_app_id++ ) {
     if( snp->apps[ snp_app_id ].port == dst_port ) {
@@ -873,6 +993,8 @@ fd_snp_process_packet( fd_snp_t * snp,
     /* The packet is not for SNP, ignore */
     FD_SNP_LOG_TRACE( "[snp-pkt] app not found for dst_port=%u, fallback to UDP", dst_port );
     fd_snp_meta_t meta = fd_snp_meta_from_parts( FD_SNP_META_PROTO_UDP, snp_app_id, src_ip, src_port );
+    /* metrics */
+    fd_snp_update_rx_metrics( snp, packet_sz, meta, NULL );
     return snp->cb.rx( snp->cb.ctx, packet, packet_sz, meta );
   }
 
@@ -891,6 +1013,8 @@ fd_snp_process_packet( fd_snp_t * snp,
 
   /* 3. If proto==UDP, recv packet as UDP */
   if( proto==FD_SNP_META_PROTO_UDP ) {
+    /* metrics */
+    fd_snp_update_rx_metrics( snp, packet_sz, meta, NULL );
     return snp->cb.rx( snp->cb.ctx, packet, packet_sz, meta );
   } /* else is implicit */
 
@@ -904,6 +1028,8 @@ fd_snp_process_packet( fd_snp_t * snp,
   if( FD_LIKELY( type==FD_SNP_TYPE_PAYLOAD ) ) {
     /* R1. If multicast, accept */
     if( FD_UNLIKELY( fd_snp_ip_is_multicast( packet ) ) ) {
+      /* metrics */
+      fd_snp_update_rx_metrics( snp, packet_sz, meta, conn );
       return snp->cb.rx( snp->cb.ctx, packet, packet_sz, meta );
     }
 
@@ -1024,6 +1150,13 @@ fd_snp_process_packet( fd_snp_t * snp,
         if( entry->val!=NULL && entry->val!=conn ) {
           entry->val = conn;
         }
+        /* metrics */
+        snp->metrics_all->conn_cur_established += 1UL;
+        snp->metrics_all->conn_acc_established += 1UL;
+        if( !!conn->snp_enforced ) {
+          snp->metrics_enf->conn_cur_established += 1UL;
+          snp->metrics_enf->conn_acc_established += 1UL;
+        }
       }
     } break;
 
@@ -1039,7 +1172,7 @@ fd_snp_process_packet( fd_snp_t * snp,
   if( FD_LIKELY( sz > 0 ) ) {
     packet_sz = (ulong)sz + sizeof(fd_ip4_udp_hdrs_t);
     fd_snp_cache_packet_for_retry( conn, packet, packet_sz, meta | FD_SNP_META_OPT_HANDSHAKE );
-    sz = fd_snp_finalize_udp_and_invoke_tx_cb( snp, packet, packet_sz, meta | FD_SNP_META_OPT_HANDSHAKE );
+    sz = fd_snp_finalize_udp_and_invoke_tx_cb( snp, packet, packet_sz, meta | FD_SNP_META_OPT_HANDSHAKE, conn );
   }
 
   /* 8. If connection is established, send/recv cached packets */
@@ -1067,20 +1200,26 @@ fd_snp_process_signature( fd_snp_t *  snp,
     /* HS3. Server receives client_cont and sends server_fini */
     case FD_SNP_TYPE_HS_SERVER_FINI_SIG: {
       fd_snp_v1_server_fini_add_signature( conn, conn->last_pkt->data+sizeof(fd_ip4_udp_hdrs_t), signature );
-      conn->last_sent_ts = fd_snp_timestamp_ms();
       conn->retry_cnt = 0;
       conn->last_pkt->meta = meta;
-      return fd_snp_finalize_udp_and_invoke_tx_cb( snp, conn->last_pkt->data, conn->last_pkt->data_sz, meta );
+      return fd_snp_finalize_udp_and_invoke_tx_cb( snp, conn->last_pkt->data, conn->last_pkt->data_sz, meta, conn );
     } break;
 
     /* HS4. Client receives server_fini and sends client_fini */
     case FD_SNP_TYPE_HS_CLIENT_FINI_SIG: {
       fd_snp_v1_client_fini_add_signature( conn, conn->last_pkt->data+sizeof(fd_ip4_udp_hdrs_t), signature );
-      conn->last_sent_ts = fd_snp_timestamp_ms();
-      sz = fd_snp_finalize_udp_and_invoke_tx_cb( snp, conn->last_pkt->data, conn->last_pkt->data_sz, meta );
+      sz = fd_snp_finalize_udp_and_invoke_tx_cb( snp, conn->last_pkt->data, conn->last_pkt->data_sz, meta, conn );
 
       /* process cached packets before return */
       fd_snp_pkt_pool_process( snp, conn, meta );
+
+      /* metrics */
+      snp->metrics_all->conn_cur_established += 1UL;
+      snp->metrics_all->conn_acc_established += 1UL;
+      if( !!conn->snp_enforced ) {
+        snp->metrics_enf->conn_cur_established += 1UL;
+        snp->metrics_enf->conn_acc_established += 1UL;
+      }
 
       return sz; /* return value is from the handshake msg, not cached packets */
     } break;
@@ -1117,6 +1256,11 @@ fd_snp_housekeeping( fd_snp_t * snp ) {
     if( FD_SNP_STATE_INVALID < conn->state && conn->state < FD_SNP_TYPE_HS_DONE ) {
       if( conn->retry_cnt >= FD_SNP_HANDSHAKE_RETRY_MAX ) {
         FD_SNP_LOG_DEBUG_W( "[snp-hkp] retry expired - deleting %s", FD_SNP_LOG_CONN( conn ) );
+        /* metrics */
+        snp->metrics_all->conn_acc_dropped_handshake   += 1UL;
+        if( !!conn->snp_enforced ) {
+          snp->metrics_enf->conn_acc_dropped_handshake += 1UL;
+        }
         fd_snp_conn_delete( snp, conn );
         continue;
       }
@@ -1131,6 +1275,11 @@ fd_snp_housekeeping( fd_snp_t * snp ) {
     if( FD_LIKELY( conn->state==FD_SNP_TYPE_HS_DONE ) ) {
       if( now > conn->last_recv_ts + FD_SNP_TIMEOUT_MS ) {
         FD_SNP_LOG_DEBUG_W( "[snp-hkp] timeout - deleting %s", FD_SNP_LOG_CONN( conn ) );
+        /* metrics */
+        snp->metrics_all->conn_acc_dropped_established   += 1UL;
+        if( !!conn->snp_enforced ) {
+          snp->metrics_enf->conn_acc_dropped_established += 1UL;
+        }
         fd_snp_conn_delete( snp, conn );
 
         uint   ip4_addr = 0;
@@ -1174,7 +1323,7 @@ fd_snp_housekeeping( fd_snp_t * snp ) {
         continue;
       } else {
         if( FD_UNLIKELY( now > conn->flow_rx_wmark_tstamp + FD_SNP_FLOW_RX_WMARK_MS ) ) {
-          FD_SNP_LOG_TRACE( "[snp-hkp] fd_snp_send_flow_rx_wmark_packet at tstamp %016lx for %s", (ulong)conn->flow_rx_wmark_tstamp, FD_SNP_LOG_CONN( conn ) );
+          FD_SNP_LOG_TRACE( "[snp-hkp] timed wmark update %ld level %ld at tstamp %016lx for %s", conn->flow_rx_wmark, conn->flow_rx_level, (ulong)conn->flow_rx_wmark_tstamp, FD_SNP_LOG_CONN( conn ) );
           fd_snp_send_flow_rx_wmark_packet( snp, conn );
           continue;
         }
@@ -1189,6 +1338,11 @@ fd_snp_housekeeping( fd_snp_t * snp ) {
 
   /* dest_meta_update and handshake retriggering. */
   if( now > snp->dest_meta_next_update_ts + FD_SNP_DEST_META_UPDATE_MS ) {
+    ulong m_dest_meta_cnt_enf     = 0UL;
+    ulong m_snp_available_cnt_all = 0UL;
+    ulong m_snp_available_cnt_enf = 0UL;
+    ulong m_snp_enabled_cnt_all   = 0UL;
+    ulong m_snp_enabled_cnt_enf   = 0UL;
     fd_snp_dest_meta_map_t * curr_map = snp->dest_meta_map;
     fd_snp_dest_meta_map_t * next_map = curr_map==snp->dest_meta_map_a ? snp->dest_meta_map_b : snp->dest_meta_map_a;
     /* swap dest_meta_map and clone unexpired entries */
@@ -1200,7 +1354,8 @@ fd_snp_housekeeping( fd_snp_t * snp ) {
       fd_snp_dest_meta_map_t * curr_entry = &curr_map[i];
       if( !fd_snp_dest_meta_map_key_equal( curr_entry->key, fd_snp_dest_meta_map_key_null() ) ) {
         /* clone current map's entry into next map's entry,
-           excluding older ones. */
+           excluding older ones.  Only use ==, since any
+           other operation may required both to be ulong. */
         if( curr_entry->val.update_idx == snp->dest_meta_update_idx ) {
           /* update next_entry */
           fd_snp_dest_meta_map_t * next_entry = fd_snp_dest_meta_map_insert( next_map, curr_entry->key );
@@ -1218,18 +1373,35 @@ fd_snp_housekeeping( fd_snp_t * snp ) {
                yields a ushort, in the range of [0, 65536) ms. */
             next_entry->val.snp_handshake_tstamp = now + (long)( fd_rng_ushort( snp->rng ) );
           }
+          m_snp_available_cnt_all   += fd_ulong_if( !!next_entry->val.snp_available, 1UL, 0UL );
+          m_snp_enabled_cnt_all     += fd_ulong_if( !!next_entry->val.snp_enabled,   1UL, 0UL );
+          if( !!next_entry->val.snp_enforced ) {
+            m_dest_meta_cnt_enf     += 1UL;
+            m_snp_available_cnt_enf += fd_ulong_if( !!next_entry->val.snp_available, 1UL, 0UL );
+            m_snp_enabled_cnt_enf   += fd_ulong_if( !!next_entry->val.snp_enabled,   1UL, 0UL );
+          }
         }
         /* manually reset current map's entry, avoiding fd_snp_dest_meta_map_clear() overhead. */
         curr_entry->key = fd_snp_dest_meta_map_key_null();
         key_i += 1UL;
       }
     }
-
     /* manually reset current map's key_cnt, avoiding fd_snp_dest_meta_map_clear() overhead. */
     fd_snp_dest_meta_map_private_t * hdr = fd_snp_dest_meta_map_private_from_slot( curr_map );
     hdr->key_cnt = 0UL;
     /* prepare for the next update */
     snp->dest_meta_next_update_ts = now + FD_SNP_DEST_META_UPDATE_MS;
+
+    /* metrics */
+    snp->metrics_all->dest_meta_cnt               = fd_snp_dest_meta_map_key_cnt( snp->dest_meta_map );
+    snp->metrics_all->dest_meta_snp_available_cnt = m_snp_available_cnt_all;
+    snp->metrics_all->dest_meta_snp_enabled_cnt   = m_snp_enabled_cnt_all;
+
+    snp->metrics_enf->dest_meta_cnt               = m_dest_meta_cnt_enf;
+    snp->metrics_enf->dest_meta_snp_available_cnt = m_snp_available_cnt_enf;
+    snp->metrics_enf->dest_meta_snp_enabled_cnt   = m_snp_enabled_cnt_enf;
+
+    snp->metrics_all->conn_cur_total              = fd_snp_conn_pool_used( snp->conn_pool );
   }
 
 #undef FD_SNP_HANDSHAKE_RETRY_MAX
@@ -1255,7 +1427,13 @@ fd_snp_set_identity( fd_snp_t *    snp,
   for( ; idx<max && used_ele<used; idx++, conn++ ) {
     if( conn->session_id == 0 ) continue;
     used_ele++;
+    /* metrics */
+    snp->metrics_all->conn_acc_dropped_set_identity += 1UL;
+    if( !!conn->snp_enforced ) {
+      snp->metrics_enf->conn_acc_dropped_set_identity += 1UL;
+    }
     fd_snp_conn_delete( snp, conn );
+
   }
   return 0;
 }
