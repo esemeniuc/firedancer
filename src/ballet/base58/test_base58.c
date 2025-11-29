@@ -695,6 +695,34 @@ test_ten_per_slot_down( void ) {
 
 #endif /* FD_HAS_AVX */
 
+/*
+➜  ~ solana address -k keypair.json
+CCeXJ3e5p7jy7pUGj2VkzXBDEDZYYS7DbuBQmy29uE3r
+➜  ~ cat keypair.json
+[90,186,227,109,52,181,177,175,8,173,145,187,202,78,29,137,26,191,134,163,99,38,200,189,161,177,215,217,52,136,59,225,166,108,95,39,171,209,250,87,81,158,70,26,86,237,14,127,94,104,109,244,89,72,3,74,183,156,29,51,193,18,224,185]
+*/
+static void
+test_bam_base58_matches_solana( void ) {
+  uchar bytes[ 32 ] = {
+    166U, 108U,  95U,  39U, 171U, 209U, 250U,  87U,
+     81U, 158U,  70U,  26U,  86U, 237U,  14U, 127U,
+     94U, 104U, 109U, 244U,  89U,  72U,   3U,  74U,
+    183U, 156U,  29U,  51U, 193U,  18U, 224U, 185U
+};
+  char  encoded[ FD_BASE58_ENCODED_32_SZ ];
+  ulong encoded_len = 0UL;
+  FD_TEST( fd_base58_encode_32( bytes, &encoded_len, encoded )==encoded );
+  char const * expected = "CCeXJ3e5p7jy7pUGj2VkzXBDEDZYYS7DbuBQmy29uE3r";
+  FD_LOG_WARNING(("%s", encoded)); // prints WDsXyPFBGJoBsAYymzJbnQkyxot61eeioVfxANE6nGvEM
+  FD_TEST( encoded_len==strlen( expected ) );
+  FD_TEST( 0==strcmp( encoded, expected ) );
+
+  uchar decoded[ 32 ];
+  FD_TEST( fd_base58_decode_32( expected, decoded )==decoded );
+  FD_TEST( 0==memcmp( decoded, bytes, sizeof( bytes ) ) );
+  /* reproduction case */
+}
+
 int
 main( int     argc,
       char ** argv ) {
@@ -702,7 +730,8 @@ main( int     argc,
 
   ulong cnt = fd_env_strip_cmdline_ulong( &argc, &argv, "--cnt", NULL, 100000UL );
   fd_rng_t _rng[1]; fd_rng_t * rng = fd_rng_join( fd_rng_new( _rng, 0U, 0UL ) );
-
+  test_bam_base58_matches_solana();
+  return 0;
 # if FD_HAS_AVX
   FD_LOG_NOTICE(( "Testing AVX internals" ));
   test_intermediate_to_raw();
