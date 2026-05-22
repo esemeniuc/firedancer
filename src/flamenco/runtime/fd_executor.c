@@ -1340,26 +1340,22 @@ fd_executor_setup_executable_account( fd_runtime_t *            runtime,
     return;
   }
 
-  /* Attempt to load the program data account from funk.  This prevents
-     any unknown program data accounts from getting loaded into the
-     executable accounts list.  If such a program is invoked, the call
-     will fail at the instruction execution level since the programdata
-     account will not exist within the executable accounts list. */
-  fd_pubkey_t *     programdata_acc = &program_loader_state->inner.program.programdata_address;
+  fd_pubkey_t const * programdata_acc = &program_loader_state->inner.program.programdata_address;
   fd_funk_txn_xid_t xid             = fd_bank_xid( bank );
 
   fd_accdb_ro_t * ro = &runtime->accounts.executable[ *executable_idx ];
 
+  /* A prior writable bundle output is the current ProgramData state until
+     the bundle commits, so do not fall through to stale accdb state. */
   int is_found = 0;
   if( FD_UNLIKELY( txn_in->bundle.is_bundle ) ) {
     for( ulong i=txn_in->bundle.prev_txn_cnt; i>0UL && !is_found; i-- ) {
-      fd_txn_out_t * prev_txn_out = txn_in->bundle.prev_txn_outs[ i-1 ];
+      fd_txn_out_t const * prev_txn_out = txn_in->bundle.prev_txn_outs[ i-1 ];
       for( ushort j=0; j<prev_txn_out->accounts.cnt; j++ ) {
         if( fd_pubkey_eq( &prev_txn_out->accounts.keys[ j ], programdata_acc ) && prev_txn_out->accounts.is_writable[ j ] ) {
-          /* If the most recent transaction shows the account closed,
-             return early so the loaded size is not increased. */
-          fd_account_meta_t * meta = prev_txn_out->accounts.account[ j ].meta;
-          if( FD_UNLIKELY( meta->lamports==0UL ) ) return;
+          fd_account_meta_t const * meta = prev_txn_out->accounts.account[ j ].meta;
+          /* Deleted in-bundle ProgramData must suppress accdb fallback. */
+          if( FD_UNLIKELY( !fd_account_meta_exists( meta ) ) ) return;
           ro = fd_accdb_ro_init_nodb( ro, programdata_acc, meta );
           is_found = 1;
           break;
