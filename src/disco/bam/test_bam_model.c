@@ -824,6 +824,7 @@ bam_model_process_ready( bam_model_harness_t * h ) {
 
 static void
 bam_model_absorb_verify_output( bam_model_harness_t * h ) {
+  test_bam_env_drain_all_pending_txns( h->env );
   ulong published = h->env->stem_seqs[0];
   ulong depth     = h->env->stem_depths[0];
   while( h->out_read_seq < published ) {

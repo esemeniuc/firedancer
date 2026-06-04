@@ -553,19 +553,34 @@ fd_bam_publish_batch( fd_bam_tile_t *            ctx,
     FD_LOG_NOTICE(( "%s", msg ));
   }
 
-  for( uchar i=0; i<packet_cnt; i++ ) {
-    fd_bam_tile_publish_txn( ctx,
-                             state->packets[i].data.bytes,
-                             state->packets[i].data.size,
-                             max_schedule_slot,
-                             batch->seq_id,
-                             i,
-                             packet_cnt,
-                             state->revert_on_error,
-                             scheduler_arrival_tspub,
-                             0 );
+  if( FD_UNLIKELY( bam_pending_txn_avail( ctx->pending_txns ) < (ulong)packet_cnt ) ) {
+    ctx->metrics.transaction_rejected_backpressure_cnt += packet_cnt;
+    fd_bam_enqueue_result( ctx, &(fd_bam_bundle_result_t) {
+      .seq_id            = batch->seq_id,
+      .slot              = batch->max_schedule_slot,
+      .bundle_txn_cnt    = packet_cnt,
+      .execution_success = 0,
+      .scheduling_error  = FD_BAM_SCHED_ERR_CONTAINER_FULL,
+      .bundle_err        = FD_BAM_BUNDLE_ERR_NONE,
+    } );
+    return;
   }
-  if( FD_UNLIKELY( state->revert_on_error ) ) ctx->metrics.atomic_batch_published_cnt++;
+
+  for( uchar i=0; i<packet_cnt; i++ ) {
+    bam_types_Packet const * packet = &state->packets[ i ];
+    fd_bam_pending_txn_t * pending = bam_pending_txn_push_tail_nocopy( ctx->pending_txns );
+    pending->payload_sz                  = (ushort)packet->data.size;
+    pending->seq_id                      = batch->seq_id;
+    pending->scheduler_arrival_tspub     = scheduler_arrival_tspub;
+    pending->source_ipv4                 = 0U;
+    pending->max_schedule_slot           = max_schedule_slot;
+    pending->sig                         = state->revert_on_error ? 1UL : 0UL;
+    pending->batch_idx                   = i;
+    pending->batch_cnt                   = packet_cnt;
+    pending->batch_tail                  = (uchar)( i+1U==packet_cnt );
+    pending->revert_on_error             = (uchar)state->revert_on_error;
+    fd_memcpy( pending->payload, packet->data.bytes, packet->data.size );
+  }
 }
 
 /* Decodes one bam_types.AtomicTxnBatch message into staged state only.
@@ -917,7 +932,6 @@ fd_bam_handle_scheduler_response( fd_bam_tile_t * ctx,
       fd_bam_publish_batch( ctx,
                             &decoded_multi->batches[ i ].state,
                             &decoded_multi->batches[ i ].batch );
-      ctx->metrics.ingress_batch_published_cnt++;
     }
     if( FD_UNLIKELY( decoded_multi->has_err_result ) ) {
       /* Reject counters are recorded at the decode site where err_result was staged

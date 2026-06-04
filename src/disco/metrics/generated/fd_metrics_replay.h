@@ -624,7 +624,7 @@ enum {
 #define FD_METRICS_GAUGE_REPLAY_RUNTIME_STATUS_DESC "Solana runtime status (0=initializing 1=loaded)"
 #define FD_METRICS_GAUGE_REPLAY_RUNTIME_STATUS_CVT  (FD_METRICS_CONVERTER_NONE)
 
-#define FD_METRICS_REPLAY_TOTAL (102UL)
+#define FD_METRICS_REPLAY_TOTAL (101UL)
 extern const fd_metrics_meta_t FD_METRICS_REPLAY[FD_METRICS_REPLAY_TOTAL];
 
 #endif /* HEADER_fd_src_disco_metrics_generated_fd_metrics_replay_h */

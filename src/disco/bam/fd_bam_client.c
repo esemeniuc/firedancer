@@ -7,7 +7,6 @@
 #include "fd_bam_tile.h"
 #include "fd_bam_types.h"
 #include "../keyguard/fd_keyguard.h"
-#include "../fd_txn_m.h"
 #include "../../discoh/plugin/fd_plugin.h"
 #include "../metrics/fd_metrics.h"
 #include "../../waltz/h2/fd_h2_conn.h"
@@ -318,55 +317,6 @@ fd_bam_client_drive_io( fd_bam_tile_t * ctx,
 # endif /* FD_HAS_OPENSSL */
 
   return fd_grpc_client_rxtx_socket( ctx->grpc_client, ctx->tcp_sock, charge_busy )>=0;
-}
-
-/* Forwards a scheduler transaction to the tango message bus. */
-void
-fd_bam_tile_publish_txn(
-    fd_bam_tile_t * ctx,
-    void const *       txn,
-    ulong              txn_sz,  /* <= FD_TXN_MTU */
-    ulong              max_schedule_slot,
-    uint               seq_id,
-    uchar              batch_idx,
-    uchar              batch_cnt,
-    _Bool              revert_on_error,
-    uint               scheduler_arrival_tspub,
-    uint               source_ipv4
-) {
-  fd_txn_m_t * txnm = fd_chunk_to_laddr( ctx->verify_out.mem, ctx->verify_out.chunk );
-  *txnm = (fd_txn_m_t) {
-    .reference_slot = 0UL,
-    .payload_sz     = (ushort)txn_sz,
-    .txn_t_sz       = 0U,
-    .source_ipv4    = source_ipv4,
-    .source_tpu     = FD_TXN_M_TPU_SOURCE_BAM,
-    .scheduler_arrival_tspub = scheduler_arrival_tspub,
-    .block_engine   = {
-      /* Pack reuses block-engine bundle metadata for atomic BAM assembly.
-         bundle_id 0 means "not a bundle", so seq_id is shifted by one. */
-      .bundle_id      = revert_on_error ? ((ulong)seq_id) + 1UL : 0UL,
-      .bundle_txn_cnt = (revert_on_error && !batch_idx) ? (ulong)batch_cnt : 0UL,
-    },
-    .bam = {
-      .max_schedule_slot = max_schedule_slot,
-      .seq_id            = seq_id,
-      .txn_cnt           = batch_cnt,
-      .batch_idx         = batch_idx,
-      .revert_on_error   = revert_on_error,
-    },
-  };
-  fd_memcpy( fd_txn_m_payload( txnm ), txn, txn_sz );
-
-  ulong sz  = fd_txn_m_realized_footprint( txnm, 0, 0 );
-
-  if( FD_UNLIKELY( !ctx->stem ) ) {
-    FD_LOG_CRIT(( "ctx->stem not set. This is a bug." ));
-  }
-
-  fd_stem_publish( ctx->stem, ctx->verify_out.idx, revert_on_error ? 1UL : 0UL, ctx->verify_out.chunk, sz, 0UL, 0UL, fd_frag_meta_ts_comp( fd_bam_now() ) );
-  ctx->verify_out.chunk = fd_dcache_compact_next( ctx->verify_out.chunk, sz, ctx->verify_out.chunk0, ctx->verify_out.wmark );
-  ctx->metrics.transaction_published_cnt++;
 }
 
 static bool

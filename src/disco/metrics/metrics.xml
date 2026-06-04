@@ -487,6 +487,7 @@ metric introduced.
     <counter name="IngressMultiMessageReceived" summary="Cumulative number of multiple_atomic_txn_batch messages decoded from BAM ingress" />
     <counter name="IngressBatchCommitAttempt" summary="Cumulative number of AtomicTxnBatch entries that entered BAM validate/commit" />
     <counter name="IngressBatchPublished" summary="Cumulative number of AtomicTxnBatch entries successfully published to verify" />
+    <counter name="TransactionRejectedBackpressure" summary="Cumulative number of BAM scheduler transactions rejected because the pending transaction queue lacked capacity" />
     <counter name="IngressBatchRejected" enum="BamIngressBatchRejectReason" summary="Cumulative number of AtomicTxnBatch entry rejects by reason after decode and batch-level validation. Wrapper-level message rejects are counted separately in bam_ingress_message_rejected." />
     <counter name="IngressMessageRejected" enum="BamIngressMessageRejectReason" summary="Cumulative number of multiple_atomic_txn_batch wrapper rejects by reason. These count scheduler messages, not AtomicTxnBatch entries." />
     <counter name="OutboundEnqueueOutcome" enum="BamEnqueueOutcome" summary="Cumulative number of BAM outbound leader-state/result enqueue outcomes and heartbeat stream_send outcomes at the gRPC send boundary" />
@@ -503,6 +504,7 @@ metric introduced.
     <gauge name="KeepaliveRttDeviation" summary="Smoothed HTTP/2 keepalive RTT variation estimate (nanoseconds)" />
     <gauge name="KeepaliveRttValid" summary="Boolean gauge: 1 after the first HTTP/2 keepalive RTT sample has been observed, 0 before RTT estimates are initialized" />
     <gauge name="FeedbackQueueDepth" summary="Current number of BAM feedback results buffered for send" />
+    <gauge name="PendingTransactions" summary="Current number of validated BAM scheduler transactions buffered and waiting for bam_verif credits" />
     <gauge name="CurrentLeaderSlotFirstIngressState" enum="BamCurrentLeaderSlotFirstIngressState" summary="One-hot state for the current leader slot's first observed scheduler-receive callback relative to slot end. Exactly one enum bucket is exported as 1 for the current local view; all others are 0." />
     <histogram name="BuilderHeartbeatArrivalDeltaNanos" min="10000" max="100000000">
         <summary>Distribution of remote BuilderHeartBeat timestamp to local scheduler-stream receive callback delta (nanoseconds); includes clock offset and is intended only for relative trend analysis</summary>

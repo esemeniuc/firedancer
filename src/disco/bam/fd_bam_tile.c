@@ -3,6 +3,7 @@
 #include "../metrics/fd_metrics.h"
 #include "../topo/fd_topo.h"
 #include "../keyguard/fd_keyload.h"
+#include "../fd_txn_m.h"
 #include "../../discoh/plugin/fd_plugin.h"
 #include "../../flamenco/gossip/fd_gossip_message.h"
 #include "../../waltz/http/fd_url.h"
@@ -30,6 +31,7 @@
 #define FD_BAM_ADMIN_RPC_RETRY_NS    ((long)100e6)
 #define FD_BAM_ADMIN_RPC_LOG_NS      ((long)5e9)
 #define FD_BAM_ADMIN_RPC_CONNECT_TIMEOUT_NS ((long)60e9)
+#define STEM_BURST (40UL)
 
 /* Provided by fdctl/firedancer version.c */
 extern char const fdctl_version_string[];
@@ -74,22 +76,23 @@ pending:
   return 0;
 }
 
-FD_FN_CONST static ulong
+static ulong
 scratch_align( void ) {
-  return fd_ulong_max( fd_ulong_max( alignof(fd_bam_tile_t), fd_grpc_client_align() ), fd_alloc_align() );
+  return fd_ulong_max( fd_ulong_max( fd_ulong_max( alignof(fd_bam_tile_t), fd_grpc_client_align() ), fd_alloc_align() ), bam_pending_txn_align() );
 }
 
-FD_FN_CONST static ulong
+static ulong
 scratch_footprint( fd_topo_tile_t const * tile ) {
-  (void)tile;
+  ulong pending_max = tile->bam.out_depth;
   ulong l = FD_LAYOUT_INIT;
   l = FD_LAYOUT_APPEND( l, alignof(fd_bam_tile_t), sizeof(fd_bam_tile_t)                        );
   l = FD_LAYOUT_APPEND( l, fd_grpc_client_align(),    fd_grpc_client_footprint( tile->bam.buf_sz ) );
   l = FD_LAYOUT_APPEND( l, fd_alloc_align(),          fd_alloc_footprint()                            );
+  l = FD_LAYOUT_APPEND( l, bam_pending_txn_align(),   bam_pending_txn_footprint( pending_max )        );
   return FD_LAYOUT_FINI( l, scratch_align() );
 }
 
-FD_FN_CONST static inline ulong
+static inline ulong
 loose_footprint( fd_topo_tile_t const * tile ) {
   /* Leftover space for OpenSSL allocations */
   return tile->bam.ssl_heap_sz;
@@ -171,6 +174,7 @@ metrics_write( fd_bam_tile_t * ctx ) {
   FD_MCNT_SET( BAM, INGRESS_MULTI_MESSAGE_RECEIVED,         ctx->metrics.ingress_multi_message_received_cnt );
   FD_MCNT_SET( BAM, INGRESS_BATCH_COMMIT_ATTEMPT,           ctx->metrics.ingress_batch_commit_attempt_cnt );
   FD_MCNT_SET( BAM, INGRESS_BATCH_PUBLISHED,                ctx->metrics.ingress_batch_published_cnt );
+  FD_MCNT_SET( BAM, TRANSACTION_REJECTED_BACKPRESSURE,       ctx->metrics.transaction_rejected_backpressure_cnt );
   FD_MCNT_ENUM_COPY( BAM, INGRESS_BATCH_REJECTED, ctx->metrics.ingress_batch_rejected_cnt );
   FD_MCNT_ENUM_COPY( BAM, INGRESS_MESSAGE_REJECTED, ctx->metrics.ingress_message_rejected_cnt );
   FD_MCNT_ENUM_COPY( BAM, OUTBOUND_ENQUEUE_OUTCOME,  ctx->metrics.outbound_enqueue_outcome_cnt );
@@ -188,6 +192,7 @@ metrics_write( fd_bam_tile_t * ctx ) {
   FD_MGAUGE_SET( BAM, KEEPALIVE_RTT_DEVIATION, (ulong)ctx->rtt->var_rtt      );
   FD_MGAUGE_SET( BAM, KEEPALIVE_RTT_VALID,     (ulong)ctx->rtt->is_rtt_valid );
   FD_MGAUGE_SET( BAM, FEEDBACK_QUEUE_DEPTH, (ulong)ctx->feedback_queue_depth );
+  FD_MGAUGE_SET( BAM, PENDING_TRANSACTIONS, bam_pending_txn_cnt( ctx->pending_txns ) );
   FD_MGAUGE_SET( BAM, ENABLED,              (ulong)ctx->enabled );
   FD_MGAUGE_SET( BAM, HEALTHY,              (ulong)( status==FD_PLUGIN_MSG_BAM_UPDATE_STATUS_CONNECTED_HEALTHY ) );
   FD_MGAUGE_SET( BAM, STREAM_LIVE,          (ulong)ctx->bam_stream_live );
@@ -898,13 +903,77 @@ fd_bam_test_metrics_write( fd_bam_tile_t * ctx ) {
 }
 
 static void
+before_credit( fd_bam_tile_t *    ctx,
+               fd_stem_context_t * stem,
+               int *               charge_busy ) {
+  if( FD_UNLIKELY( !ctx->stem ) ) ctx->stem = stem;
+  if( FD_LIKELY( bam_pending_txn_empty( ctx->pending_txns ) ) ) fd_bam_client_step( ctx, charge_busy );
+}
+
+static void
 after_credit( fd_bam_tile_t *  ctx,
               fd_stem_context_t * stem,
               int *               opt_poll_in,
               int *               charge_busy ) {
-  (void)opt_poll_in;
   if( FD_UNLIKELY( !ctx->stem ) ) ctx->stem = stem;
-  fd_bam_client_step( ctx, charge_busy );
+
+  ulong drain_cnt = 0UL;
+  while( FD_LIKELY( !bam_pending_txn_empty( ctx->pending_txns ) ) && FD_LIKELY( drain_cnt<STEM_BURST ) ) {
+    fd_bam_pending_txn_t const * head = bam_pending_txn_peek_head_const( ctx->pending_txns );
+    ulong batch_cnt = head->revert_on_error ? (ulong)head->batch_cnt : 1UL;
+    if( FD_UNLIKELY( drain_cnt + batch_cnt > STEM_BURST ) ) break;
+    if( FD_UNLIKELY( bam_pending_txn_cnt( ctx->pending_txns ) < batch_cnt ) ) break;
+
+    for( ulong i=0UL; i<batch_cnt; i++ ) {
+      fd_bam_pending_txn_t const * pending = bam_pending_txn_peek_head_const( ctx->pending_txns );
+      fd_txn_m_t * txnm = fd_chunk_to_laddr( ctx->verify_out.mem, ctx->verify_out.chunk );
+      *txnm = (fd_txn_m_t) {
+        .reference_slot = 0UL,
+        .payload_sz     = pending->payload_sz,
+        .txn_t_sz       = 0U,
+        .source_ipv4    = pending->source_ipv4,
+        .source_tpu     = FD_TXN_M_TPU_SOURCE_BAM,
+        .scheduler_arrival_tspub = pending->scheduler_arrival_tspub,
+        .block_engine   = {
+          /* Pack reuses block-engine bundle metadata for atomic BAM assembly.
+             bundle_id 0 means "not a bundle", so seq_id is shifted by one. */
+          .bundle_id      = pending->revert_on_error ? ((ulong)pending->seq_id) + 1UL : 0UL,
+          .bundle_txn_cnt = (pending->revert_on_error && !pending->batch_idx) ? (ulong)pending->batch_cnt : 0UL,
+        },
+        .bam = {
+          .max_schedule_slot = pending->max_schedule_slot,
+          .seq_id            = pending->seq_id,
+          .txn_cnt           = pending->batch_cnt,
+          .batch_idx         = pending->batch_idx,
+          .revert_on_error   = pending->revert_on_error,
+        },
+      };
+      fd_memcpy( fd_txn_m_payload( txnm ), pending->payload, pending->payload_sz );
+
+      ulong sz = fd_txn_m_realized_footprint( txnm, 0, 0 );
+      fd_stem_publish( stem,
+                       ctx->verify_out.idx,
+                       pending->sig,
+                       ctx->verify_out.chunk,
+                       sz,
+                       0UL,
+                       0UL,
+                       fd_frag_meta_ts_comp( fd_bam_now() ) );
+      ctx->verify_out.chunk = fd_dcache_compact_next( ctx->verify_out.chunk, sz, ctx->verify_out.chunk0, ctx->verify_out.wmark );
+      if( FD_UNLIKELY( pending->batch_tail ) ) {
+        ctx->metrics.ingress_batch_published_cnt++;
+        if( FD_UNLIKELY( pending->revert_on_error ) ) ctx->metrics.atomic_batch_published_cnt++;
+      }
+      bam_pending_txn_remove_head( ctx->pending_txns );
+      drain_cnt++;
+      ctx->metrics.transaction_published_cnt++;
+    }
+  }
+
+  if( FD_UNLIKELY( drain_cnt ) ) {
+    *opt_poll_in = 0;
+    *charge_busy = 1;
+  }
 
   if( FD_UNLIKELY( !ctx->plugin_out.mem ) ) return;
   if( FD_LIKELY( !ctx->gui_dirty && ctx->bam_status_recent == ctx->bam_status_plugin ) ) return;
@@ -985,6 +1054,14 @@ after_credit( fd_bam_tile_t *  ctx,
   ctx->bam_status_plugin = ctx->bam_status_recent;
   ctx->gui_dirty = 0U;
   *charge_busy = 1;
+}
+
+void
+fd_bam_test_after_credit( fd_bam_tile_t *    ctx,
+                          fd_stem_context_t * stem,
+                          int *               opt_poll_in,
+                          int *               charge_busy ) {
+  after_credit( ctx, stem, opt_poll_in, charge_busy );
 }
 
 static int
@@ -1286,6 +1363,8 @@ privileged_init( fd_topo_t *      topo,
   fd_bam_tile_t * ctx         = FD_SCRATCH_ALLOC_APPEND( l, alignof(fd_bam_tile_t), sizeof(fd_bam_tile_t)                        );
   void *             grpc_mem    = FD_SCRATCH_ALLOC_APPEND( l, fd_grpc_client_align(),    fd_grpc_client_footprint( tile->bam.buf_sz ) );
   void *             alloc_mem   = FD_SCRATCH_ALLOC_APPEND( l, fd_alloc_align(),          fd_alloc_footprint()                            );
+  ulong              pending_max = tile->bam.out_depth;
+  void *             pending_mem = FD_SCRATCH_ALLOC_APPEND( l, bam_pending_txn_align(),    bam_pending_txn_footprint( pending_max )        );
   ulong              scratch_end = FD_SCRATCH_ALLOC_FINI( l, scratch_align() );
   (void)alloc_mem; /* potentially unused */
 
@@ -1298,6 +1377,7 @@ privileged_init( fd_topo_t *      topo,
 
   memset( ctx, 0, sizeof(fd_bam_tile_t) );
   ctx->grpc_client_mem = grpc_mem;
+  ctx->pending_txns    = bam_pending_txn_join( bam_pending_txn_new( pending_mem, pending_max ) );
   ctx->grpc_buf_max    = tile->bam.buf_sz;
   ctx->tcp_sock        = -1;
   ctx->admin_rpc_fd    = FD_BAM_ADMIN_RPC_FD_NONE;
@@ -1628,7 +1708,6 @@ populate_allowed_fds( fd_topo_t const *      topo,
   return out_cnt;
 }
 
-#define STEM_BURST (40UL)
 #define STEM_LAZY ((long)10e6)
 
 #define STEM_CALLBACK_CONTEXT_TYPE  fd_bam_tile_t
@@ -1636,6 +1715,7 @@ populate_allowed_fds( fd_topo_t const *      topo,
 
 #define STEM_CALLBACK_DURING_HOUSEKEEPING fd_bam_tile_housekeeping
 #define STEM_CALLBACK_METRICS_WRITE       metrics_write
+#define STEM_CALLBACK_BEFORE_CREDIT       before_credit
 #define STEM_CALLBACK_AFTER_CREDIT        after_credit
 #define STEM_CALLBACK_DURING_FRAG         bam_during_frag
 #define STEM_CALLBACK_AFTER_FRAG          bam_after_frag

@@ -25,6 +25,27 @@ typedef struct fd_bam_tile fd_bam_tile_t;
 #define FD_BAM_LEADER_SCHEDULE_RECHECK_WALLCLOCK_NS ((long)15e9)
 #define FD_BAM_LEADER_SCHEDULE_RECHECK_DUE_SLOT 0UL
 #define FD_BAM_LEADER_SCHEDULE_RECHECK_NONE_SLOT ULONG_MAX
+
+struct fd_bam_pending_txn {
+  uchar  payload[ FD_TXN_MTU ];
+  ushort payload_sz;
+  uint   seq_id;
+  uint   scheduler_arrival_tspub;
+  uint   source_ipv4;
+  ulong  max_schedule_slot;
+  ulong  sig;
+  uchar  batch_idx;
+  uchar  batch_cnt;
+  uchar  batch_tail;
+  uchar  revert_on_error;
+};
+
+typedef struct fd_bam_pending_txn fd_bam_pending_txn_t;
+
+#define DEQUE_NAME bam_pending_txn
+#define DEQUE_T    fd_bam_pending_txn_t
+#include "../../util/tmpl/fd_deque_dynamic.c"
+
 #if FD_HAS_OPENSSL
 #include <openssl/ssl.h> /* SSL_CTX */
 #endif
@@ -69,6 +90,7 @@ struct fd_bam_metrics {
 
   ulong ingress_batch_commit_attempt_cnt;
   ulong ingress_batch_published_cnt;
+  ulong transaction_rejected_backpressure_cnt;
   ulong ingress_batch_rejected_cnt[ FD_METRICS_ENUM_BAM_INGRESS_BATCH_REJECT_REASON_CNT ];
   ulong ingress_message_rejected_cnt[ FD_METRICS_ENUM_BAM_INGRESS_MESSAGE_REJECT_REASON_CNT ];
 
@@ -292,6 +314,7 @@ struct fd_bam_tile {
 
   /* Stem publish */
   fd_stem_context_t * stem;                          /* Cached stem context handed to callbacks */
+  fd_bam_pending_txn_t * pending_txns;                /* Validated scheduler transactions awaiting bam_verif credits */
   fd_bam_out_ctx_t    verify_out;                    /* Output ring for transaction verification */
   fd_bam_out_ctx_t    plugin_out;                    /* Output ring for plugin status updates */
   fd_bam_out_ctx_t    gossip_out;       /* Stem output buffer used for BAM gossip updates (Full firedancer, not Frankendncer) */
@@ -749,19 +772,6 @@ fd_bam_client_grpc_rx_timeout(
     ulong  request_ctx, /* FD_BAM_CLIENT_REQ_{...} */
     int    deadline_kind /* FD_GRPC_DEADLINE_{HEADER|RX_END} */
 );
-
-void
-fd_bam_tile_publish_txn(
-    fd_bam_tile_t * ctx,
-    void const *       txn,
-    ulong              txn_sz,
-    ulong              max_schedule_slot,
-    uint               seq_id,
-    uchar              batch_idx,
-    uchar              batch_cnt,
-    _Bool              revert_on_error,
-    uint               scheduler_arrival_tspub,
-    uint               source_ipv4 );
 
 void
 fd_bam_publish_batch( fd_bam_tile_t *            ctx,

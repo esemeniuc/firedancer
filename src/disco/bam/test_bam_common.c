@@ -8,6 +8,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+extern void
+fd_bam_test_after_credit( fd_bam_tile_t *    ctx,
+                          fd_stem_context_t * stem,
+                          int *               opt_poll_in,
+                          int *               charge_busy );
+
 FD_IMPORT_BINARY( test_bam_sample_vote, "src/disco/pack/sample_vote.bin" );
 
 typedef struct {
@@ -401,6 +407,7 @@ struct test_bam_env {
   _Bool            stem_out_reliable[1];
   fd_frag_meta_t *  out_mcache;
   uchar *           out_dcache;
+  void *            pending_txn_mem;
   int               server_sock;
 
   fd_bam_tile_t state[1];
@@ -450,6 +457,11 @@ test_bam_env_create( test_bam_env_t * env,
   fd_base58_encode_32( state->bam_identity_pubkey, NULL, state->bam_identity_pubkey_b58 );
   state->stem = env->stem;
   state->enabled = 1;
+  ulong const pending_max = mcache_depth;
+  env->pending_txn_mem = fd_wksp_alloc_laddr( wksp, bam_pending_txn_align(), bam_pending_txn_footprint( pending_max ), 1UL );
+  FD_TEST( env->pending_txn_mem );
+  state->pending_txns = bam_pending_txn_join( bam_pending_txn_new( env->pending_txn_mem, pending_max ) );
+  FD_TEST( state->pending_txns );
   state->verify_out = (fd_bam_out_ctx_t) {
     .idx    = 0UL,
     .mem    = dcache,
@@ -506,6 +518,31 @@ test_bam_env_create( test_bam_env_t * env,
       FD_MHIST_MIN( BAM, SCHEDULER_PONG_SEND_NANOS ),
       FD_MHIST_MAX( BAM, SCHEDULER_PONG_SEND_NANOS ) );
   return env;
+}
+
+FD_FN_UNUSED static ulong
+test_bam_env_drain_pending_txns( test_bam_env_t * env ) {
+  fd_bam_tile_t * state = env->state;
+  ulong out_idx = state->verify_out.idx;
+  ulong seq_before = env->stem_seqs[ out_idx ];
+  ulong pending_before = bam_pending_txn_cnt( state->pending_txns );
+  int opt_poll_in = 1;
+  int charge_busy = 0;
+  fd_bam_test_after_credit( state, env->stem, &opt_poll_in, &charge_busy );
+  ulong published = env->stem_seqs[ out_idx ] - seq_before;
+  if( FD_UNLIKELY( pending_before ) ) {
+    FD_TEST( published>0UL );
+    FD_TEST( !opt_poll_in );
+    FD_TEST( charge_busy );
+  }
+  return published;
+}
+
+FD_FN_UNUSED static ulong
+test_bam_env_drain_all_pending_txns( test_bam_env_t * env ) {
+  ulong published = 0UL;
+  while( !bam_pending_txn_empty( env->state->pending_txns ) ) published += test_bam_env_drain_pending_txns( env );
+  return published;
 }
 
 FD_FN_UNUSED static void
@@ -576,6 +613,11 @@ test_bam_env_destroy( test_bam_env_t * env ) {
   if( env->state->fee_cfg ) {
     fd_wksp_free_laddr( env->state->fee_cfg );
     env->state->fee_cfg = NULL;
+  }
+  if( env->state->pending_txns ) {
+    fd_wksp_free_laddr( bam_pending_txn_delete( bam_pending_txn_leave( env->state->pending_txns ) ) );
+    env->state->pending_txns = NULL;
+    env->pending_txn_mem = NULL;
   }
   fd_wksp_free_laddr( fd_mcache_delete( fd_mcache_leave( env->out_mcache ) ) );
   void * dcache_shmem = fd_dcache_leave( env->out_dcache );
