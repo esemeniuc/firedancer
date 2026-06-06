@@ -27,7 +27,7 @@ WEBSOCAT_BUFFER_BYTES = "12000000"
 ETHTOOL_STATS_FILTER_RE = re.compile(r"drop|error|discard|miss|fifo", re.IGNORECASE)
 WEBSOCKET_SUMMARY_KEYS = frozenset({"identity_key", "startup_time_nanos", "completed_slot"})
 WEBSOCKET_SLOT_QUERY_REQUEST_KEY = "query_detailed"
-WEBSOCKET_SLOT_QUERY_RESPONSE_KEY = "query"
+WEBSOCKET_SLOT_QUERY_RESPONSE_KEYS = frozenset({"query", "query_detailed"})
 WEBSOCKET_BAM_UPDATE_TOPIC = "bam"
 WEBSOCKET_BAM_UPDATE_KEY = "update"
 
@@ -564,11 +564,13 @@ def parse_slot_result_row(row: dict[str, Any]) -> Optional[dict[str, Any]]:
 
     Expected wire shape:
       - request: {"topic":"slot","key":"query_detailed","params":{"slot":<u64>}}
-      - response: {"topic":"slot","key":"query","value":{"publish":...,"waterfall":...}}
+      - response: {"topic":"slot","key":"query_detailed","value":{"publish":...,"waterfall":...}}
+      - legacy response: {"topic":"slot","key":"query","value":{"publish":...,"waterfall":...}}
     """
 
-    # Live GUI servers currently reply to slot.query_detailed with key="query".
-    if row.get("topic") != "slot" or row.get("key") != WEBSOCKET_SLOT_QUERY_RESPONSE_KEY:
+    # Current GUI servers reply from fd_gui_printf_slot_request_detailed with
+    # key="query_detailed"; key="query" is kept for older/live deployments.
+    if row.get("topic") != "slot" or row.get("key") not in WEBSOCKET_SLOT_QUERY_RESPONSE_KEYS:
         return None
 
     value = row.get("value")
@@ -818,6 +820,7 @@ def scrape_websocket_slots(
         for i, slot in enumerate(query_slots)
     ]
 
+    seen_query_response_frames = False
     seen_query_results = False
     pending_ids = {req["id"] for req in query_payloads}
     for wait_secs, timeout_secs in (
@@ -825,7 +828,7 @@ def scrape_websocket_slots(
         (query_wait_secs + 4, detail_timeout_secs + 40),
     ):
         details: list[dict[str, Any]] = []
-        seen_ids: set[str] = set()
+        seen_ids: set[int] = set()
         deadline = time.monotonic() + timeout_secs
         idle_deadline = time.monotonic() + wait_secs
 
@@ -843,9 +846,10 @@ def scrape_websocket_slots(
                 details.append(row)
                 if (
                     row.get("topic") == "slot"
-                    and row.get("key") == WEBSOCKET_SLOT_QUERY_RESPONSE_KEY
+                    and row.get("key") in WEBSOCKET_SLOT_QUERY_RESPONSE_KEYS
                     and isinstance(row.get("id"), int)
                 ):
+                    seen_query_response_frames = True
                     response_id = row["id"]
                     if response_id in pending_ids and response_id not in seen_ids:
                         seen_ids.add(response_id)
@@ -856,8 +860,13 @@ def scrape_websocket_slots(
 
         seen_query_results = seen_query_results or any(
             row.get("topic") == "slot"
-            and row.get("key") == WEBSOCKET_SLOT_QUERY_RESPONSE_KEY
+            and row.get("key") in WEBSOCKET_SLOT_QUERY_RESPONSE_KEYS
             and row.get("value") is not None
+            for row in details
+        )
+        seen_query_response_frames = seen_query_response_frames or any(
+            row.get("topic") == "slot"
+            and row.get("key") in WEBSOCKET_SLOT_QUERY_RESPONSE_KEYS
             for row in details
         )
 
@@ -911,10 +920,10 @@ def scrape_websocket_slots(
             output_rows.extend({"record_type": "slot", **row} for row in parsed_rows)
             return output_rows
 
-    if seen_query_results:
+    if seen_query_results or seen_query_response_frames:
         return []
     raise RuntimeError(
-        "no slot query results returned; "
+        "no slot query response frames returned; "
         "try increasing --websocket-query-wait-secs/--websocket-detail-timeout-secs",
     )
 
