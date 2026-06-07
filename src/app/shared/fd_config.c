@@ -5,6 +5,7 @@
 #include "../platform/fd_net_util.h"
 #include "../platform/fd_sys_util.h"
 #include "../../ballet/toml/fd_toml.h"
+#include "../../disco/bam/fd_bam_types.h"
 #include "../../disco/genesis/fd_genesis_cluster.h"
 
 #include <unistd.h>
@@ -553,6 +554,11 @@ fd_config_validate( fd_config_t const * config ) {
 
   CFG_HAS_NON_ZERO( tiles.verify.signature_cache_size );
   CFG_HAS_NON_ZERO( tiles.verify.receive_buffer_size );
+  if( FD_UNLIKELY( config->tiles.bam.enabled &&
+                   config->tiles.verify.receive_buffer_size < FD_BAM_STEM_BURST ) ) {
+    FD_LOG_ERR(( "`tiles.verify.receive_buffer_size` must be at least %lu when `tiles.bam.enabled` is true",
+                 FD_BAM_STEM_BURST ));
+  }
 
   CFG_HAS_NON_ZERO( tiles.dedup.signature_cache_size );
 

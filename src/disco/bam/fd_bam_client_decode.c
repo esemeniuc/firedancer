@@ -23,6 +23,8 @@
 
 FD_STATIC_ASSERT( FD_BAM_MAX_TXN_PER_ATOMIC_BATCH <= FD_PACK_MAX_TXN_PER_BUNDLE,
                   bam_decode_packet_limit_fits_staging );
+FD_STATIC_ASSERT( FD_BAM_MAX_TXN_PER_ATOMIC_BATCH * FD_BAM_MAX_ATOMIC_BATCHES_PER_PACKET <= FD_BAM_STEM_BURST,
+                  bam_decode_packet_limit_fits_stem_burst );
 
 static FD_TL char fd_bam_dump_log_buf[ FD_BAM_DUMP_LOG_BUF_SZ ];
 
@@ -551,6 +553,14 @@ fd_bam_publish_batch( fd_bam_tile_t *            ctx,
                                txn_unknown_slot_end,
                                leader_slot );
     FD_LOG_NOTICE(( "%s", msg ));
+  }
+
+  if( FD_UNLIKELY( !packet_cnt || packet_cnt>FD_BAM_STEM_BURST ) ) {
+    FD_LOG_CRIT(( "invalid BAM pending batch size: seq_id=%u max_schedule_slot=%lu packet_cnt=%u revert_on_error=%u",
+                  batch->seq_id,
+                  max_schedule_slot,
+                  (uint)packet_cnt,
+                  (uint)state->revert_on_error ));
   }
 
   if( FD_UNLIKELY( bam_pending_txn_avail( ctx->pending_txns ) < (ulong)packet_cnt ) ) {

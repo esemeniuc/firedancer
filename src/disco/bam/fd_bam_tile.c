@@ -31,7 +31,7 @@
 #define FD_BAM_ADMIN_RPC_RETRY_NS    ((long)100e6)
 #define FD_BAM_ADMIN_RPC_LOG_NS      ((long)5e9)
 #define FD_BAM_ADMIN_RPC_CONNECT_TIMEOUT_NS ((long)60e9)
-#define STEM_BURST (40UL)
+#define STEM_BURST FD_BAM_STEM_BURST
 
 /* Provided by fdctl/firedancer version.c */
 extern char const fdctl_version_string[];
@@ -920,12 +920,37 @@ after_credit( fd_bam_tile_t *  ctx,
   ulong drain_cnt = 0UL;
   while( FD_LIKELY( !bam_pending_txn_empty( ctx->pending_txns ) ) && FD_LIKELY( drain_cnt<STEM_BURST ) ) {
     fd_bam_pending_txn_t const * head = bam_pending_txn_peek_head_const( ctx->pending_txns );
-    ulong batch_cnt = head->revert_on_error ? (ulong)head->batch_cnt : 1UL;
+    _Bool batch_revert = !!head->revert_on_error;
+    ulong batch_cnt    = batch_revert ? (ulong)head->batch_cnt : 1UL;
+    if( FD_UNLIKELY( batch_revert &&
+                     ( !batch_cnt || batch_cnt>STEM_BURST || head->batch_idx ) ) ) {
+      FD_LOG_CRIT(( "corrupt BAM pending atomic txn metadata: seq_id=%u batch_idx=%u batch_cnt=%u",
+                    head->seq_id,
+                    (uint)head->batch_idx,
+                    (uint)head->batch_cnt ));
+    }
+
+    uint batch_seq_id = head->seq_id;
     if( FD_UNLIKELY( drain_cnt + batch_cnt > STEM_BURST ) ) break;
     if( FD_UNLIKELY( bam_pending_txn_cnt( ctx->pending_txns ) < batch_cnt ) ) break;
 
     for( ulong i=0UL; i<batch_cnt; i++ ) {
       fd_bam_pending_txn_t const * pending = bam_pending_txn_peek_head_const( ctx->pending_txns );
+      if( FD_UNLIKELY( batch_revert &&
+                       ( !pending->revert_on_error ||
+                         pending->seq_id!=batch_seq_id ||
+                         pending->batch_idx!=(uchar)i ||
+                         pending->batch_cnt!=(uchar)batch_cnt ||
+                         pending->batch_tail!=(uchar)(i+1UL==batch_cnt) ) ) ) {
+        FD_LOG_CRIT(( "corrupt BAM pending atomic txn member: seq_id=%u expected_seq_id=%u batch_idx=%u expected_batch_idx=%lu batch_cnt=%u expected_batch_cnt=%u batch_tail=%u",
+                      pending->seq_id,
+                      batch_seq_id,
+                      (uint)pending->batch_idx,
+                      i,
+                      (uint)pending->batch_cnt,
+                      (uint)batch_cnt,
+                      (uint)pending->batch_tail ));
+      }
       fd_txn_m_t * txnm = fd_chunk_to_laddr( ctx->verify_out.mem, ctx->verify_out.chunk );
       *txnm = (fd_txn_m_t) {
         .reference_slot = 0UL,

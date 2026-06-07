@@ -17,7 +17,6 @@ FD_IMPORT_BINARY( bam_dump_txn_fixture, "src/ballet/txn/fixtures/transaction2.bi
 
 #define TEST_BAM_MAX_TXN_PER_ATOMIC_BATCH       5UL
 #define TEST_BAM_MAX_ATOMIC_BATCHES_PER_PACKET  8UL
-#define TEST_BAM_STEM_BURST                     40UL
 
 /* Test-only shims implemented in fd_bam_tile.c so this unit test can
    drive internal BAM tile paths without exposing them through production
@@ -951,21 +950,21 @@ test_bam_pending_over_stem_burst_drains_in_multiple_passes( fd_wksp_t * wksp ) {
                              single_protobuf_sz,
                              FD_BAM_CLIENT_REQ_BAM_InitSchedulerStream );
 
-  FD_TEST( bam_pending_txn_cnt( state->pending_txns ) == TEST_BAM_STEM_BURST + 1UL );
-  FD_TEST( test_bam_env_drain_pending_txns( env ) == TEST_BAM_STEM_BURST );
+  FD_TEST( bam_pending_txn_cnt( state->pending_txns ) == FD_BAM_STEM_BURST + 1UL );
+  FD_TEST( test_bam_env_drain_pending_txns( env ) == FD_BAM_STEM_BURST );
   FD_TEST( bam_pending_txn_cnt( state->pending_txns ) == 1UL );
-  FD_TEST( state->metrics.transaction_published_cnt == TEST_BAM_STEM_BURST );
+  FD_TEST( state->metrics.transaction_published_cnt == FD_BAM_STEM_BURST );
   FD_TEST( state->metrics.atomic_batch_published_cnt == TEST_BAM_MAX_ATOMIC_BATCHES_PER_PACKET );
   FD_TEST( state->metrics.ingress_batch_published_cnt == TEST_BAM_MAX_ATOMIC_BATCHES_PER_PACKET );
 
   FD_TEST( test_bam_env_drain_pending_txns( env ) == 1UL );
   FD_TEST( bam_pending_txn_empty( state->pending_txns ) );
-  FD_TEST( state->metrics.transaction_published_cnt == TEST_BAM_STEM_BURST + 1UL );
+  FD_TEST( state->metrics.transaction_published_cnt == FD_BAM_STEM_BURST + 1UL );
   FD_TEST( state->metrics.ingress_batch_published_cnt == TEST_BAM_MAX_ATOMIC_BATCHES_PER_PACKET + 1UL );
 
-  fd_frag_meta_t const * last_meta = &env->out_mcache[ TEST_BAM_STEM_BURST ];
+  fd_frag_meta_t const * last_meta = &env->out_mcache[ FD_BAM_STEM_BURST ];
   fd_txn_m_t const * last = fd_chunk_to_laddr_const( state->verify_out.mem, last_meta->chunk );
-  FD_TEST( last_meta->seq == TEST_BAM_STEM_BURST );
+  FD_TEST( last_meta->seq == FD_BAM_STEM_BURST );
   FD_TEST( last->bam.seq_id == 1000U );
   FD_TEST( last->bam.revert_on_error == 0U );
 

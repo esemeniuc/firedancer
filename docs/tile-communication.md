@@ -103,7 +103,7 @@ This section covers the BAM links currently wired in `src/app/fdctl/topology.c` 
 
 | Link | Kind ids | Producer | Consumers | Reliability / polling | Depth | MTU / burst | Workspace / gate | Payload and semantics |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `bam_verif` | `0` | `bam` | all `verify` tiles | Reliable, polled | `config->tiles.verify.receive_buffer_size` | `FD_TPU_PARSED_MTU`, burst `1` | `bam_verif`; BAM enabled | BAM scheduler transactions as `fd_txn_m_t` plus payload with `source_tpu=FD_TXN_M_TPU_SOURCE_BAM`. Verify forwards successes to `verify_dedup`; parse/verify failures are reported to `bank_bam`. |
+| `bam_verif` | `0` | `bam` | all `verify` tiles | Reliable, polled | `config->tiles.verify.receive_buffer_size` | `FD_TPU_PARSED_MTU`, burst `40` | `bam_verif`; BAM enabled | BAM scheduler transactions as `fd_txn_m_t` plus payload with `source_tpu=FD_TXN_M_TPU_SOURCE_BAM`. Verify forwards successes to `verify_dedup`; parse/verify failures are reported to `bank_bam`. |
 | `bam_sign` | `0` | `bam` | `sign[0]` | Unreliable, polled | `65536` | `256`, burst `1` | `bam_sign`; BAM enabled | BAM auth challenge signing request. |
 | `sign_bam` | `0` | `sign[0]` | `bam` | Unreliable, unpolled | `128` | `64`, burst `1` | `sign_bam`; BAM enabled | BAM auth signature response, consumed by keyguard client spin loop. |
 | `pack_bam_ldr` | `0` | `pack` | `bam` | Unreliable, polled | `FD_BAM_MAX_PENDING_RESULTS` | `sizeof(fd_bam_leader_state_t)`, burst `1` | `pack_bam_ldr`; BAM enabled | Leader state snapshots: slot, tick, CU budget, slot end time, and current-slot BAM work bit. BAM coalesces this as latest-value-wins; newer snapshots may supersede older ones while BAM is reconnecting or behind. |

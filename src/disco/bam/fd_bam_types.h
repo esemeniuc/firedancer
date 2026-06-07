@@ -23,6 +23,7 @@
 /* FD_BAM_MAX_PENDING_RESULTS is the bundle result queue depth, so long disconnects
  * don't drop SchedulerMessage payloads. */
 #define FD_BAM_MAX_PENDING_RESULTS 2048U
+#define FD_BAM_STEM_BURST          40UL
 #define FD_BAM_BUNDLE_ERR_NONE            (0U)
 #define FD_BAM_BUNDLE_ERR_DESER           (1U)
 #define FD_BAM_BUNDLE_ERR_GENERIC_INVALID (2U)
