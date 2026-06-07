@@ -11,20 +11,12 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-
-#define FD_BAM_MAX_TXN_PER_ATOMIC_BATCH        5U
-#define FD_BAM_MAX_ATOMIC_BATCHES_PER_PACKET   8U
 #define FD_BAM_DUMP_ADDR_BUF_SZ                (FD_BASE58_ENCODED_32_SZ + 32UL)
 #define FD_BAM_DUMP_PROGRAM_BUF_SZ             (FD_BAM_DUMP_ADDR_BUF_SZ + 32UL)
 #define FD_BAM_DUMP_LOG_BUF_SZ                 (31UL*4096UL)
 #define FD_BAM_DUMP_HEX_PREVIEW_MAX            24UL
 #define FD_BAM_DUMP_IX_ACCT_PREVIEW_MAX        4UL
 #define FD_BAM_DUMP_LUT_IDX_PREVIEW_MAX        8UL
-
-FD_STATIC_ASSERT( FD_BAM_MAX_TXN_PER_ATOMIC_BATCH <= FD_PACK_MAX_TXN_PER_BUNDLE,
-                  bam_decode_packet_limit_fits_staging );
-FD_STATIC_ASSERT( FD_BAM_MAX_TXN_PER_ATOMIC_BATCH * FD_BAM_MAX_ATOMIC_BATCHES_PER_PACKET <= FD_BAM_STEM_BURST,
-                  bam_decode_packet_limit_fits_stem_burst );
 
 static FD_TL char fd_bam_dump_log_buf[ FD_BAM_DUMP_LOG_BUF_SZ ];
 

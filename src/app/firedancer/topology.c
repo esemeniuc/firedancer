@@ -534,7 +534,7 @@ fd_topo_initialize( config_t * config ) {
   }
 
   if( FD_UNLIKELY( bam_enabled ) ) {
-    /**/                   fd_topob_link( topo, "bam_verif",    "bam_verif",    config->tiles.verify.receive_buffer_size, FD_TPU_PARSED_MTU,          40UL );
+    /**/                   fd_topob_link( topo, "bam_verif",    "bam_verif",    config->tiles.verify.receive_buffer_size, FD_TPU_PARSED_MTU,          FD_BAM_STEM_BURST );
     /**/                   fd_topob_link( topo, "bam_sign",     "bam_sign",     65536UL,                                  256UL,                     1UL );
     /**/                   fd_topob_link( topo, "sign_bam",     "sign_bam",     128UL,                                    64UL,                      1UL );
     /**/                   fd_topob_link( topo, "bam_gossip",   "bam_gossip",   128UL,                                    sizeof(fd_bam_contact_update_t), 1UL );

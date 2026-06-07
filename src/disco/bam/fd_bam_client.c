@@ -82,6 +82,13 @@ fd_bam_set_stream_live( fd_bam_tile_t * ctx,
   ctx->bam_stream_live = live;
 }
 
+static inline void
+fd_bam_clear_auth_state( fd_bam_tile_t * ctx ) {
+  ctx->bam_auth_inflight      = 0;
+  ctx->bam_auth_ready         = 0;
+  ctx->challenge_to_sign[ 0 ] = '\0';
+}
+
 static int
 fd_bam_parse_scheduler_leader_state_reject( char const * msg,
                                             uint         msg_len,
@@ -146,6 +153,15 @@ fd_bam_drop_pending_leader_state( fd_bam_tile_t *                       ctx,
   ctx->bam_leader_pending = 0U;
 }
 
+static inline void
+fd_bam_clear_stream_state( fd_bam_tile_t *                    ctx,
+                           fd_bam_leader_pending_drop_reason_t reason ) {
+  ctx->bam_stream            = NULL;
+  fd_bam_set_stream_live( ctx, 0U );
+  ctx->bam_stream_connecting = 0;
+  fd_bam_drop_pending_leader_state( ctx, reason );
+}
+
 void
 fd_bam_client_reset( fd_bam_tile_t * ctx ) {
   long now = fd_bam_now();
@@ -187,9 +203,7 @@ fd_bam_client_reset( fd_bam_tile_t * ctx ) {
   ctx->bam_stream                 = NULL;
   fd_bam_set_stream_live( ctx, 0U );
   ctx->bam_stream_connecting      = 0;
-  ctx->bam_auth_ready             = 0;
-  ctx->challenge_to_sign[ 0 ]     = '\0';
-  ctx->bam_auth_inflight          = 0;
+  fd_bam_clear_auth_state( ctx );
   ctx->bam_config_inflight        = 0;
   ctx->bam_config_received        = 0;
   ctx->bam_last_builder_activity_ns = 0L;
@@ -404,25 +418,19 @@ fd_bam_handle_auth_challenge( fd_bam_tile_t * ctx,
   pb_istream_t istream = pb_istream_from_buffer( data, data_sz );
   bam_api_AuthChallengeResponse resp = bam_api_AuthChallengeResponse_init_default;
   if( FD_UNLIKELY( !pb_decode( &istream, &bam_api_AuthChallengeResponse_msg, &resp ) ) ) {
-    ctx->bam_auth_inflight = 0;
-    ctx->bam_auth_ready    = 0;
-    ctx->challenge_to_sign[ 0 ] = '\0';
+    fd_bam_clear_auth_state( ctx );
     FD_LOG_WARNING(( "Protobuf decode of (bam_api.AuthChallengeResponse) failed" ));
     return 0;
   }
 
   size_t challenge_len = strnlen( resp.challenge_to_sign, sizeof(resp.challenge_to_sign) );
   if( FD_UNLIKELY( !challenge_len ) ) {
-    ctx->bam_auth_inflight = 0;
-    ctx->bam_auth_ready    = 0;
-    ctx->challenge_to_sign[ 0 ] = '\0';
+    fd_bam_clear_auth_state( ctx );
     FD_LOG_WARNING(( "AuthChallengeResponse challenge is empty" ));
     return 0;
   }
   if( FD_UNLIKELY( challenge_len == sizeof(resp.challenge_to_sign) ) ) {
-    ctx->bam_auth_inflight = 0;
-    ctx->bam_auth_ready    = 0;
-    ctx->challenge_to_sign[ 0 ] = '\0';
+    fd_bam_clear_auth_state( ctx );
     FD_LOG_WARNING(( "AuthChallengeResponse challenge not NUL terminated" ));
     return 0;
   }
@@ -557,7 +565,6 @@ fd_bam_handle_config( fd_bam_tile_t * ctx,
                                ctx->stem,
                                ( status == FD_PLUGIN_MSG_BAM_UPDATE_STATUS_CONNECTED_HEALTHY ) && fd_bam_has_effective_contact( ctx ) );
 
-  // update fee config
   _Bool bam_config_fee_updated = false;
   ushort new_commission_bps = (ushort)fd_uint_min( cfg->commission_bps, 10000U );
   if( FD_UNLIKELY( ctx->commission_bps != new_commission_bps ) ) {
@@ -1264,20 +1271,15 @@ fd_bam_client_request_failed( fd_bam_tile_t * ctx,
   fd_bam_tile_backoff( ctx, fd_bam_now() );
   switch( request_ctx ) {
   case FD_BAM_CLIENT_REQ_BAM_GetAuthChallenge:
-    ctx->bam_auth_inflight      = 0;
-    ctx->bam_auth_ready         = 0;
-    ctx->challenge_to_sign[ 0 ] = '\0';
+    fd_bam_clear_auth_state( ctx );
     break;
   case FD_BAM_CLIENT_REQ_BAM_GetBuilderConfig:
     ctx->bam_config_inflight = 0;
     break;
   case FD_BAM_CLIENT_REQ_BAM_InitSchedulerStream:
-    ctx->bam_stream             = NULL;
-    fd_bam_set_stream_live( ctx, 0U );
-    ctx->bam_stream_connecting  = 0;
-    ctx->bam_auth_ready         = 0;
+    fd_bam_clear_stream_state( ctx, FD_BAM_LEADER_PENDING_DROP_REQUEST_FAILED );
+    ctx->bam_auth_ready = 0;
     ctx->challenge_to_sign[ 0 ] = '\0';
-    fd_bam_drop_pending_leader_state( ctx, FD_BAM_LEADER_PENDING_DROP_REQUEST_FAILED );
     break;
   }
 }
@@ -1337,10 +1339,7 @@ fd_bam_client_grpc_rx_end(
     ctx->bam_config_inflight = 0;
     break;
   case FD_BAM_CLIENT_REQ_BAM_InitSchedulerStream:
-    ctx->bam_stream            = NULL;
-    fd_bam_set_stream_live( ctx, 0U );
-    ctx->bam_stream_connecting = 0;
-    fd_bam_drop_pending_leader_state( ctx, FD_BAM_LEADER_PENDING_DROP_STREAM_ENDED );
+    fd_bam_clear_stream_state( ctx, FD_BAM_LEADER_PENDING_DROP_STREAM_ENDED );
     break;
   default:
     break;
@@ -1360,18 +1359,13 @@ fd_bam_client_grpc_rx_timeout(
   ctx->defer_reset = 1;
   switch( request_ctx ) {
   case FD_BAM_CLIENT_REQ_BAM_GetAuthChallenge:
-    ctx->bam_auth_inflight      = 0;
-    ctx->bam_auth_ready         = 0;
-    ctx->challenge_to_sign[ 0 ] = '\0';
+    fd_bam_clear_auth_state( ctx );
     break;
   case FD_BAM_CLIENT_REQ_BAM_GetBuilderConfig:
     ctx->bam_config_inflight = 0;
     break;
   case FD_BAM_CLIENT_REQ_BAM_InitSchedulerStream:
-    ctx->bam_stream            = NULL;
-    fd_bam_set_stream_live( ctx, 0U );
-    ctx->bam_stream_connecting = 0;
-    fd_bam_drop_pending_leader_state( ctx, FD_BAM_LEADER_PENDING_DROP_STREAM_TIMEOUT );
+    fd_bam_clear_stream_state( ctx, FD_BAM_LEADER_PENDING_DROP_STREAM_TIMEOUT );
     break;
   default:
     break;
@@ -1434,7 +1428,7 @@ fd_bam_client_status( fd_bam_tile_t const * ctx ) {
   }
 
   if( FD_UNLIKELY( !ctx->bam_stream_live ) ) {
-    return FD_PLUGIN_MSG_BAM_UPDATE_STATUS_CONNECTING; // TODO: check if correct, differs from bundle client
+    return FD_PLUGIN_MSG_BAM_UPDATE_STATUS_CONNECTING; /* scheduler stream not live yet */
   }
 
   long now = fd_bam_now();

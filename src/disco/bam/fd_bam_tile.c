@@ -1100,7 +1100,6 @@ fd_bam_tile_ctrl_update_current( fd_bam_tile_t * ctx ) {
     return 0;
   }
   char buf[FD_URL_MAX];
-  // FIXME: check if `http` already in server_fqdn, if so, dont prepend
   int n = snprintf( buf, FD_URL_MAX, "%s://%.*s:%u",
                     ctx->is_ssl ? "https" : "http",
                     ctx->server_fqdn_len,
@@ -1290,7 +1289,7 @@ fd_bam_tile_parse_endpoint( fd_bam_tile_t *     ctx,
       "[tiles.bam.url]"
   );
   if( FD_UNLIKELY( res < 0 ) ) {
-    FD_LOG_CRIT(( "Failed to parse BAM endpoint" )); // TODO: dont crash
+    FD_LOG_CRIT(( "Failed to parse BAM endpoint" ));
   }
   fd_cstr_fini( fd_cstr_append_text( fd_cstr_init( ctx->server_fqdn ), url->host, url->host_len ) );
   ctx->server_fqdn_len = (ushort)url->host_len;

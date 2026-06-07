@@ -327,8 +327,8 @@ struct fd_bam_tile {
   /* App metrics */
   fd_bam_metrics_t metrics;                         /* Tile-local counters flushed to metrics */
 
-  /* Check engine light */
-  fd_plugin_bam_update_status_t bam_status_recent;  /* most recently observed 'check engine light' */ //TODO: update this for bam
+  /* BAM status publication */
+  fd_plugin_bam_update_status_t bam_status_recent;  /* most recently observed BAM status */
   fd_plugin_bam_update_status_t bam_status_plugin;  /* last 'plugin' update written */
   fd_plugin_bam_update_status_t bam_status_counted; /* last status used for healthy-edge counters */
   fd_plugin_bam_update_status_t bam_status_logged;  /* last logged bundle status */

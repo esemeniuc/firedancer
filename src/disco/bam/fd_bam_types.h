@@ -24,9 +24,16 @@
  * don't drop SchedulerMessage payloads. */
 #define FD_BAM_MAX_PENDING_RESULTS 2048U
 #define FD_BAM_STEM_BURST          40UL
+#define FD_BAM_MAX_TXN_PER_ATOMIC_BATCH        5U
+#define FD_BAM_MAX_ATOMIC_BATCHES_PER_PACKET   8U
 #define FD_BAM_BUNDLE_ERR_NONE            (0U)
 #define FD_BAM_BUNDLE_ERR_DESER           (1U)
 #define FD_BAM_BUNDLE_ERR_GENERIC_INVALID (2U)
+
+FD_STATIC_ASSERT( FD_BAM_MAX_TXN_PER_ATOMIC_BATCH <= FD_PACK_MAX_TXN_PER_BUNDLE,
+                  bam_atomic_batch_limit_fits_pack_bundle );
+FD_STATIC_ASSERT( (ulong)FD_BAM_MAX_TXN_PER_ATOMIC_BATCH * (ulong)FD_BAM_MAX_ATOMIC_BATCHES_PER_PACKET <= FD_BAM_STEM_BURST,
+                  bam_atomic_batch_limit_fits_stem_burst );
 
 #define FD_BAM_ERR_GENERIC_INVALID_NONE                     (0U)
 #define FD_BAM_ERR_GENERIC_INVALID_BUILDER_INFO_UNAVAILABLE (1U)
