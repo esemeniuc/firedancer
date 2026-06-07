@@ -204,7 +204,7 @@ test_bam_atomic_verify_failure_result_owner( void ) {
     ulong bam_seq_before = seqs[ 1 ];
     after_frag( ctx, IN_IDX_BAM, 0UL, 0UL, sizeof(fd_txn_m_t), 0UL, 0UL, &stem );
 
-    int expect_result = !cases[ case_idx ].revert_on_error || cases[ case_idx ].batch_idx==0U;
+    int expect_result = cases[ case_idx ].batch_idx==0U;
     if( expect_result ) {
       FD_TEST( seqs[ 1 ]==bam_seq_before+1UL );
       fd_bam_bundle_result_t const * res = (fd_bam_bundle_result_t const *)bam_dcache;

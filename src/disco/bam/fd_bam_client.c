@@ -42,19 +42,10 @@ fd_bam_now( void ) {
 
 void
 fd_bam_tile_backoff( fd_bam_tile_t * ctx,
-                        long               now ) {
-  uint iter = ctx->backoff_iter;
-  if( now < ctx->backoff_reset ) iter = 0U;
-  iter++;
-
-  /* FIXME proper backoff */
+                     long            now ) {
   long wait_ns = (long)2e9;
   wait_ns = (long)( fd_rng_ulong( ctx->rng ) & ( (1UL<<fd_ulong_find_msb_w_default( (ulong)wait_ns, 0 ))-1UL ) );
-
-  ctx->backoff_until = now +   wait_ns;
-  ctx->backoff_reset = now + 2*wait_ns;
-
-  ctx->backoff_iter = iter;
+  ctx->backoff_until = now + wait_ns;
 }
 
 static double
@@ -146,8 +137,6 @@ fd_bam_drop_pending_leader_state( fd_bam_tile_t *                       ctx,
   case FD_BAM_LEADER_PENDING_DROP_STREAM_TIMEOUT:
     ctx->metrics.leader_pending_dropped_cnt[ FD_METRICS_ENUM_BAM_LEADER_PENDING_DROP_REASON_V_STREAM_TIMEOUT_IDX ]++;
     break;
-  default:
-    break;
   }
 
   ctx->bam_leader_pending = 0U;
@@ -213,9 +202,6 @@ fd_bam_client_reset( fd_bam_tile_t * ctx ) {
      scheduler stream comes up.  The server expects every dispatched
      bundle to eventually produce a result; dropping them here would lose
      that guarantee. */
-  /* ctx->feedback_queue_depth        = 0UL; */
-  /* ctx->bam_results_head           = 0UL; */
-  /* ctx->bam_results_tail           = 0UL; */
   fd_bam_drop_pending_leader_state( ctx, FD_BAM_LEADER_PENDING_DROP_CLIENT_RESET );
 }
 
@@ -691,54 +677,15 @@ fd_bam_send_result( fd_bam_tile_t *               ctx,
     case FD_BAM_BUNDLE_ERR_NONE:
       break;
     case FD_BAM_BUNDLE_ERR_DESER:
-      if( FD_UNLIKELY( res->deser_reason > _bam_types_DeserializationErrorReason_MAX ) ) {
-        out->which_reason = bam_types_NotCommitted_generic_invalid_tag;
-        snprintf( out->reason.generic_invalid.message,
-                  sizeof(out->reason.generic_invalid.message),
-                  "invalid deserialization error %u",
-                  res->deser_reason );
-        break;
-      }
       out->which_reason                        = bam_types_NotCommitted_deserialization_error_tag;
       out->reason.deserialization_error.index  = res->deser_index;
       out->reason.deserialization_error.reason = (bam_types_DeserializationErrorReason)res->deser_reason;
       break;
-    case FD_BAM_BUNDLE_ERR_GENERIC_INVALID:
-      out->which_reason = bam_types_NotCommitted_generic_invalid_tag;
-      if( FD_UNLIKELY( res->generic_invalid_reason==FD_BAM_ERR_GENERIC_INVALID_NONE ||
-                       res->generic_invalid_reason>=FD_BAM_ERR_GENERIC_INVALID_CNT ||
-                       !FD_BAM_ERR_GENERIC_INVALID_STRINGS[ res->generic_invalid_reason ] ) ) {
-        snprintf( out->reason.generic_invalid.message,
-                  sizeof(out->reason.generic_invalid.message),
-                  "invalid generic-invalid reason %u",
-                  res->generic_invalid_reason );
-        break;
-      }
-      fd_cstr_ncpy( out->reason.generic_invalid.message,
-                    FD_BAM_ERR_GENERIC_INVALID_STRINGS[ res->generic_invalid_reason ],
-                    sizeof( out->reason.generic_invalid.message ) );
-      break;
-    default:
-      FD_LOG_WARNING(( "Invalid error type %u, value out of range.", res->bundle_err ));
-      out->which_reason = bam_types_NotCommitted_generic_invalid_tag;
-      snprintf( out->reason.generic_invalid.message,
-                sizeof(out->reason.generic_invalid.message),
-                "invalid bundle error %u",
-                res->bundle_err );
-      break;
     }
 
     if( FD_UNLIKELY( !out->which_reason && res->scheduling_error != FD_BAM_SCHED_ERR_NONE ) ) {
-      if( FD_LIKELY( res->scheduling_error <= _bam_types_SchedulingError_MAX ) ) {
-        out->which_reason            = bam_types_NotCommitted_scheduling_error_tag;
-        out->reason.scheduling_error = (bam_types_SchedulingError)res->scheduling_error;
-      } else {
-        out->which_reason = bam_types_NotCommitted_generic_invalid_tag;
-        snprintf( out->reason.generic_invalid.message,
-                  sizeof(out->reason.generic_invalid.message),
-                  FD_BAM_ERR_FMT_INVALID_SCHEDULING_ERROR,
-                  res->scheduling_error );
-      }
+      out->which_reason            = bam_types_NotCommitted_scheduling_error_tag;
+      out->reason.scheduling_error = (bam_types_SchedulingError)res->scheduling_error;
     }
 
     if( FD_UNLIKELY( !out->which_reason ) ) {
@@ -766,16 +713,10 @@ fd_bam_send_result( fd_bam_tile_t *               ctx,
       if( FD_UNLIKELY( !found_non_cancelled && res->bundle_txn_cnt>1U ) ) {
         out->which_reason            = bam_types_NotCommitted_scheduling_error_tag;
         out->reason.scheduling_error = bam_types_SchedulingError_POH_TIMEOUT;
-      } else if( FD_LIKELY( res->transaction_err[ err_idx ] < _bam_types_TransactionErrorReason_ARRAYSIZE ) ) {
+      } else {
         out->which_reason                    = bam_types_NotCommitted_transaction_error_tag;
         out->reason.transaction_error.index  = err_idx;
         out->reason.transaction_error.reason = (bam_types_TransactionErrorReason)res->transaction_err[ err_idx ];
-      } else {
-        out->which_reason = bam_types_NotCommitted_generic_invalid_tag;
-        snprintf( out->reason.generic_invalid.message,
-                  sizeof(out->reason.generic_invalid.message),
-                  FD_BAM_ERR_FMT_TRANSACTION_ERROR,
-                  (uint)res->transaction_err[ err_idx ] );
       }
     }
 
@@ -1341,8 +1282,6 @@ fd_bam_client_grpc_rx_end(
   case FD_BAM_CLIENT_REQ_BAM_InitSchedulerStream:
     fd_bam_clear_stream_state( ctx, FD_BAM_LEADER_PENDING_DROP_STREAM_ENDED );
     break;
-  default:
-    break;
   }
 }
 
@@ -1366,8 +1305,6 @@ fd_bam_client_grpc_rx_timeout(
     break;
   case FD_BAM_CLIENT_REQ_BAM_InitSchedulerStream:
     fd_bam_clear_stream_state( ctx, FD_BAM_LEADER_PENDING_DROP_STREAM_TIMEOUT );
-    break;
-  default:
     break;
   }
 }

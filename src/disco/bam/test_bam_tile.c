@@ -993,7 +993,6 @@ test_bam_queue_full_rejects_whole_batch_without_partial_enqueue( fd_wksp_t * wks
     pending->payload[0] = (uchar)i;
     pending->seq_id     = (uint)i;
     pending->batch_cnt  = 1U;
-    pending->batch_tail = 1U;
   }
 
   uchar protobuf[512];
@@ -3431,8 +3430,6 @@ test_bam_identity_switch_invalidates_leader_schedule_state( fd_wksp_t * wksp ) {
   };
   state->bam_leader_pending = 1U;
   state->backoff_until      = 111L;
-  state->backoff_reset      = 222L;
-  state->backoff_iter       = 3U;
   state->defer_reset        = 1U;
 
   fd_bam_tile_housekeeping( state );
@@ -3457,8 +3454,6 @@ test_bam_identity_switch_invalidates_leader_schedule_state( fd_wksp_t * wksp ) {
   FD_TEST( state->bam_leader_state.current_slot_has_bam_work == 0U );
   FD_TEST( state->bam_leader_pending == 0U );
   FD_TEST( state->backoff_until == 0L );
-  FD_TEST( state->backoff_reset == 0L );
-  FD_TEST( state->backoff_iter == 0U );
 
   state->keyswitch = NULL;
   test_bam_env_destroy( env );
@@ -3995,7 +3990,7 @@ test_bam_scheduler_result_not_committed_generic_failure_reason( fd_wksp_t * wksp
   g_clock = (long)13e9;
   test_bam_keepalive_sync( state, g_clock );
 
-  /* Case 1: generic execution failure yields generic_invalid */
+  /* Generic execution failure yields generic_invalid. */
   fd_bam_bundle_result_t generic = test_make_bundle_result( 904, 1904, 2 );
   generic.execution_success = 0;
   test_enqueue_bundle_result( state, &generic );
@@ -4012,123 +4007,6 @@ test_bam_scheduler_result_not_committed_generic_failure_reason( fd_wksp_t * wksp
   FD_TEST( result->result.not_committed.which_reason == bam_types_NotCommitted_generic_invalid_tag );
   FD_TEST( 0 == strcmp( result->result.not_committed.reason.generic_invalid.message,
                       FD_BAM_ERR_MSG_BUNDLE_EXECUTION_FAILED ) );
-
-  /* Case 2: out-of-range transaction error falls back to generic_invalid with prefix */
-  fd_bam_bundle_result_t invalid = test_make_bundle_result( 905, 1905, 2 );
-  invalid.execution_success = 0;
-  invalid.transaction_err[0] = _bam_types_TransactionErrorReason_ARRAYSIZE;
-  invalid.transaction_err_count = 1U;
-  test_enqueue_bundle_result( state, &invalid );
-
-  FD_TEST( fd_bam_test_flush_results( state ) == 1 );
-  FD_TEST( state->feedback_queue_depth == 0UL );
-
-  fd_memset( &decoded, 0, sizeof(decoded) );
-  test_bam_decode_last_message( state, &decoded );
-  FD_TEST( decoded.msg.versioned_msg.v0.which_msg == bam_api_SchedulerMessageV0_multiple_atomic_txn_batch_result_tag );
-  FD_TEST( decoded.multi.result_cnt == 1UL );
-  result = &decoded.multi.results[0];
-  FD_TEST( result->which_result == bam_types_AtomicTxnBatchResult_not_committed_tag );
-  FD_TEST( result->result.not_committed.which_reason == bam_types_NotCommitted_generic_invalid_tag );
-  char const * generic_msg = result->result.not_committed.reason.generic_invalid.message;
-  size_t const txn_prefix_len = strlen( FD_BAM_ERR_PREFIX_TRANSACTION_ERROR );
-  FD_TEST( 0 == strncmp( generic_msg, FD_BAM_ERR_PREFIX_TRANSACTION_ERROR, txn_prefix_len ) );
-  FD_TEST( strlen( generic_msg )>txn_prefix_len );
-
-  test_bam_env_destroy( env );
-}
-
-static void
-test_bam_scheduler_result_not_committed_invalid_scheduling_error_reason( fd_wksp_t * wksp ) {
-  /* Out-of-range scheduling_error codes fall back to generic_invalid with the
-     invalid scheduling prefix. */
-  test_bam_env_t env[1];
-  test_bam_env_create( env, wksp );
-  test_bam_env_mock_conn( env );
-  fd_bam_tile_t * state = env->state;
-
-  test_bam_prepare_scheduler_stream( state );
-
-  g_clock = (long)14e9;
-  test_bam_keepalive_sync( state, g_clock );
-
-  fd_bam_bundle_result_t res = test_make_bundle_result( 906, 1906, 2 );
-  res.execution_success = 0;
-  res.scheduling_error  = (ushort)(_bam_types_SchedulingError_MAX + 1);
-  test_enqueue_bundle_result( state, &res );
-
-  FD_TEST( fd_bam_test_flush_results( state ) == 1 );
-  FD_TEST( state->feedback_queue_depth == 0UL );
-
-  test_bam_decoded_message_t decoded;
-  test_bam_decode_last_message( state, &decoded );
-  FD_TEST( decoded.msg.versioned_msg.v0.which_msg == bam_api_SchedulerMessageV0_multiple_atomic_txn_batch_result_tag );
-  FD_TEST( decoded.multi.result_cnt == 1UL );
-  bam_types_AtomicTxnBatchResult const * result = &decoded.multi.results[0];
-  FD_TEST( result->which_result == bam_types_AtomicTxnBatchResult_not_committed_tag );
-  FD_TEST( result->result.not_committed.which_reason == bam_types_NotCommitted_generic_invalid_tag );
-  char const * sched_msg = result->result.not_committed.reason.generic_invalid.message;
-  size_t const sched_prefix_len = strlen( FD_BAM_ERR_PREFIX_INVALID_SCHEDULING );
-  FD_TEST( 0 == strncmp( sched_msg, FD_BAM_ERR_PREFIX_INVALID_SCHEDULING, sched_prefix_len ) );
-  FD_TEST( strlen( sched_msg )>sched_prefix_len );
-
-  test_bam_env_destroy( env );
-}
-
-static void
-test_bam_enqueue_result_preserves_invalid_bundle_error( fd_wksp_t * wksp ) {
-  test_bam_env_t env[1];
-  test_bam_env_create( env, wksp );
-  test_bam_env_mock_conn( env );
-  fd_bam_tile_t * state = env->state;
-
-  test_bam_prepare_scheduler_stream( state );
-
-  g_clock = (long)16e9;
-  test_bam_keepalive_sync( state, g_clock );
-
-  fd_bam_bundle_result_t res = test_make_bundle_result( 912, 1912, 2 );
-  res.execution_success      = 0;
-  res.bundle_err             = 160U;
-  res.generic_invalid_reason = FD_BAM_ERR_GENERIC_INVALID_NONE;
-  fd_bam_enqueue_result( state, &res );
-
-  FD_TEST( state->feedback_queue_depth == 1U );
-  fd_bam_bundle_result_t const * queued = &state->bam_results[ state->bam_results_head ];
-  FD_TEST( queued->bundle_err == 160U );
-  FD_TEST( queued->generic_invalid_reason == FD_BAM_ERR_GENERIC_INVALID_NONE );
-
-  FD_TEST( fd_bam_test_flush_results( state ) == 1 );
-  FD_TEST( state->feedback_queue_depth == 0UL );
-
-  test_bam_decoded_message_t decoded;
-  test_bam_decode_last_message( state, &decoded );
-  FD_TEST( decoded.msg.versioned_msg.v0.which_msg == bam_api_SchedulerMessageV0_multiple_atomic_txn_batch_result_tag );
-  FD_TEST( decoded.multi.result_cnt == 1UL );
-  bam_types_AtomicTxnBatchResult const * result = &decoded.multi.results[0];
-  FD_TEST( result->which_result == bam_types_AtomicTxnBatchResult_not_committed_tag );
-  FD_TEST( result->result.not_committed.which_reason == bam_types_NotCommitted_generic_invalid_tag );
-  FD_TEST( 0 == strncmp( result->result.not_committed.reason.generic_invalid.message,
-                         "invalid bundle error ",
-                         sizeof("invalid bundle error ")-1UL ) );
-  FD_TEST( result->result.not_committed.reason.generic_invalid.message[ sizeof("invalid bundle error ")-1UL ] != '\0' );
-
-  test_bam_env_destroy( env );
-}
-
-static void
-test_bam_enqueue_result_drops_oversized_bundle_txn_cnt( fd_wksp_t * wksp ) {
-  test_bam_env_t env[1];
-  test_bam_env_create( env, wksp );
-  fd_bam_tile_t * state = env->state;
-
-  fd_bam_bundle_result_t res = {
-    .bundle_txn_cnt = (uchar)( FD_PACK_MAX_TXN_PER_BUNDLE + 2U ),
-  };
-  fd_bam_enqueue_result( state, &res );
-
-  FD_TEST( state->feedback_queue_depth == 0UL );
-  FD_TEST( state->metrics.feedback_results_dropped_cnt == 1UL );
 
   test_bam_env_destroy( env );
 }
@@ -5850,9 +5728,6 @@ main( int     argc,
   test_bam_scheduler_result_not_committed_transaction_error_prefers_non_cancelled( wksp );
   test_bam_scheduler_result_not_committed_all_cancelled_falls_back_to_poh_timeout( wksp );
   test_bam_scheduler_result_not_committed_generic_failure_reason( wksp );
-  test_bam_scheduler_result_not_committed_invalid_scheduling_error_reason( wksp );
-  test_bam_enqueue_result_preserves_invalid_bundle_error( wksp );
-  test_bam_enqueue_result_drops_oversized_bundle_txn_cnt( wksp );
 
   /* Control surface */
   test_bam_ctrl_updates_url_and_sni( wksp );

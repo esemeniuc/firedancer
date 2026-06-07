@@ -1129,12 +1129,8 @@ bam_model_expected_wire_result( fd_bam_bundle_result_t const * res,
   }
 
   if( FD_UNLIKELY( res->scheduling_error != FD_BAM_SCHED_ERR_NONE ) ) {
-    if( FD_LIKELY( res->scheduling_error <= _bam_types_SchedulingError_MAX ) ) {
-      out->which_reason     = bam_types_NotCommitted_scheduling_error_tag;
-      out->scheduling_error = (bam_types_SchedulingError)res->scheduling_error;
-    } else {
-      out->which_reason = bam_types_NotCommitted_generic_invalid_tag;
-    }
+    out->which_reason     = bam_types_NotCommitted_scheduling_error_tag;
+    out->scheduling_error = (bam_types_SchedulingError)res->scheduling_error;
     return;
   }
 
@@ -1164,13 +1160,9 @@ bam_model_expected_wire_result( fd_bam_bundle_result_t const * res,
       return;
     }
 
-    if( FD_LIKELY( res->transaction_err[ err_idx ] < _bam_types_TransactionErrorReason_ARRAYSIZE ) ) {
-      out->which_reason = bam_types_NotCommitted_transaction_error_tag;
-      out->txn_reason   = (bam_types_TransactionErrorReason)res->transaction_err[ err_idx ];
-      out->idx          = err_idx;
-    } else {
-      out->which_reason = bam_types_NotCommitted_generic_invalid_tag;
-    }
+    out->which_reason = bam_types_NotCommitted_transaction_error_tag;
+    out->txn_reason   = (bam_types_TransactionErrorReason)res->transaction_err[ err_idx ];
+    out->idx          = err_idx;
     return;
   }
 

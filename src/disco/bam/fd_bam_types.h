@@ -7,18 +7,7 @@
 #include "../metrics/generated/fd_metrics_enums.h"
 #include "../../flamenco/runtime/fd_runtime_err.h"
 
-/* Central definitions for user-visible BAM error strings.
-   Keep format strings and prefixes in one place so tests can
-   assert on them without duplicating literals. */
-
-#define FD_BAM_ERR_MSG_BUILDER_INFO_UNAVAILABLE "builder info unavailable"
 #define FD_BAM_ERR_MSG_BUNDLE_EXECUTION_FAILED  "bundle execution failed"
-
-#define FD_BAM_ERR_FMT_TRANSACTION_ERROR        "transaction error %u"
-#define FD_BAM_ERR_PREFIX_TRANSACTION_ERROR     "transaction error "
-
-#define FD_BAM_ERR_FMT_INVALID_SCHEDULING_ERROR "invalid scheduling error %u"
-#define FD_BAM_ERR_PREFIX_INVALID_SCHEDULING    "invalid scheduling error "
 
 /* FD_BAM_MAX_PENDING_RESULTS is the bundle result queue depth, so long disconnects
  * don't drop SchedulerMessage payloads. */
@@ -28,21 +17,11 @@
 #define FD_BAM_MAX_ATOMIC_BATCHES_PER_PACKET   8U
 #define FD_BAM_BUNDLE_ERR_NONE            (0U)
 #define FD_BAM_BUNDLE_ERR_DESER           (1U)
-#define FD_BAM_BUNDLE_ERR_GENERIC_INVALID (2U)
 
 FD_STATIC_ASSERT( FD_BAM_MAX_TXN_PER_ATOMIC_BATCH <= FD_PACK_MAX_TXN_PER_BUNDLE,
                   bam_atomic_batch_limit_fits_pack_bundle );
 FD_STATIC_ASSERT( (ulong)FD_BAM_MAX_TXN_PER_ATOMIC_BATCH * (ulong)FD_BAM_MAX_ATOMIC_BATCHES_PER_PACKET <= FD_BAM_STEM_BURST,
                   bam_atomic_batch_limit_fits_stem_burst );
-
-#define FD_BAM_ERR_GENERIC_INVALID_NONE                     (0U)
-#define FD_BAM_ERR_GENERIC_INVALID_BUILDER_INFO_UNAVAILABLE (1U)
-
-#define FD_BAM_ERR_GENERIC_INVALID_CNT (sizeof(FD_BAM_ERR_GENERIC_INVALID_STRINGS)/sizeof(FD_BAM_ERR_GENERIC_INVALID_STRINGS[0]))
-static char const * const FD_BAM_ERR_GENERIC_INVALID_STRINGS[] = {
-  [ FD_BAM_ERR_GENERIC_INVALID_NONE                     ] = NULL,
-  [ FD_BAM_ERR_GENERIC_INVALID_BUILDER_INFO_UNAVAILABLE ] = FD_BAM_ERR_MSG_BUILDER_INFO_UNAVAILABLE,
-};
 
 #define FD_BAM_SHRED_SOCK_MAX          8UL
 
@@ -63,8 +42,6 @@ typedef struct {
   uchar bundle_err;        /* FD_BAM_BUNDLE_ERR_* selector for bundle-level rejection prior to execution. */
   uchar deser_index;       /* Zero-based transaction index tied to the deserialization error; only valid when bundle_err==FD_BAM_BUNDLE_ERR_DESER. */
   uchar deser_reason;      /* bam_types_DeserializationErrorReason enumerator for the failure reported by deser_index; only meaningful when bundle_err==FD_BAM_BUNDLE_ERR_DESER. */
-  uchar generic_invalid_reason; /* FD_BAM_ERR_GENERIC_INVALID_* describing a generic invalid rejection; only meaningful when bundle_err==FD_BAM_BUNDLE_ERR_GENERIC_INVALID. */
-  uchar generic_invalid_index;  /* Optional index tied to the generic invalid rejection (e.g. pack idx when pack rejects a bundle). */
 } fd_bam_bundle_result_t;
 
 typedef struct {

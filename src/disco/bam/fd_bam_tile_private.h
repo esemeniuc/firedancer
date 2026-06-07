@@ -36,7 +36,6 @@ struct fd_bam_pending_txn {
   ulong  sig;
   uchar  batch_idx;
   uchar  batch_cnt;
-  uchar  batch_tail;
   uchar  revert_on_error;
 };
 
@@ -211,7 +210,6 @@ struct fd_bam_tile {
   /* OpenSSL */
   SSL_CTX *    ssl_ctx;                           /* Owning TLS context for BAM connection */
   SSL *        ssl;                               /* TLS session bound to tcp_sock */
-  fd_alloc_t * ssl_alloc;                         /* TODO: use this when BAM owns OpenSSL allocator teardown/reset lifecycle */
 # endif /* FD_HAS_OPENSSL */
 
   /* Currently running config, values loaded via TOML and updated by set_bam admin control */
@@ -308,9 +306,7 @@ struct fd_bam_tile {
 
   /* Error backoff */
   fd_rng_t rng[1];                                /* RNG used to randomize reconnects */
-  uint     backoff_iter;                          /* Backoff iteration counter */
   long     backoff_until;                         /* Earliest ts to retry connection */
-  long     backoff_reset;                         /* Errors before this ts reset backoff_iter */
 
   /* Stem publish */
   fd_stem_context_t * stem;                          /* Cached stem context handed to callbacks */
@@ -350,26 +346,6 @@ typedef struct fd_bam_tile fd_bam_tile_t;
 FD_FN_UNUSED static inline void
 fd_bam_enqueue_result( fd_bam_tile_t *               ctx,
                        fd_bam_bundle_result_t const * res ) {
-  if( FD_UNLIKELY( res->bundle_txn_cnt > FD_PACK_MAX_TXN_PER_BUNDLE ) ) {
-    FD_LOG_WARNING(( "Dropping malformed BAM bundle result txn_cnt=%u exceeds max=%lu (seq_id=%u slot=%lu)",
-                     res->bundle_txn_cnt, FD_PACK_MAX_TXN_PER_BUNDLE, res->seq_id, res->slot ));
-    ctx->metrics.feedback_results_dropped_cnt++;
-    return;
-  }
-  if( FD_UNLIKELY( res->bundle_err > FD_BAM_BUNDLE_ERR_GENERIC_INVALID ) ) {
-    FD_LOG_WARNING(( "Malformed BAM bundle result bundle_err=%u (seq_id=%u slot=%lu)",
-                     res->bundle_err, res->seq_id, res->slot ));
-  } else if( FD_UNLIKELY( res->bundle_err==FD_BAM_BUNDLE_ERR_GENERIC_INVALID &&
-                           (res->generic_invalid_reason==FD_BAM_ERR_GENERIC_INVALID_NONE ||
-                            res->generic_invalid_reason>=FD_BAM_ERR_GENERIC_INVALID_CNT) ) ) {
-    FD_LOG_WARNING(( "Malformed BAM generic-invalid reason=%u (seq_id=%u slot=%lu)",
-                     res->generic_invalid_reason, res->seq_id, res->slot ));
-  } else if( FD_UNLIKELY( res->bundle_err==FD_BAM_BUNDLE_ERR_DESER &&
-                           res->deser_reason>_bam_types_DeserializationErrorReason_MAX ) ) {
-    FD_LOG_WARNING(( "Malformed BAM deser reason=%u (seq_id=%u slot=%lu)",
-                     res->deser_reason, res->seq_id, res->slot ));
-  }
-
   if( FD_UNLIKELY( ctx->feedback_queue_depth>=FD_BAM_MAX_PENDING_RESULTS ) ) {
     FD_LOG_WARNING(( "Dropping BAM bundle result (bam tile queue full): seq_id=%u slot=%lu bundle_txn_cnt=%u exec_success=%u sched_err=%u",
                      res->seq_id, res->slot, res->bundle_txn_cnt, (uint)res->execution_success, res->scheduling_error ));

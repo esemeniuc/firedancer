@@ -151,11 +151,9 @@ after_frag( fd_verify_ctx_t *   ctx,
 
   if( FD_UNLIKELY( failure_idx!=ULONG_MAX ) ) {
     if( FD_UNLIKELY( is_bundle ) ) ctx->bundle_failed = 1;
-    /* For atomic BAM, verify reports failures before any prefix reaches pack
-       (batch_idx 0) and suppresses later-member failures.  If a later
-       sequence proves the prefix incomplete, pack reports the first missing
-       member as the terminal deserialization result. */
-    if( FD_UNLIKELY( is_bam && (!txnm->bam.revert_on_error || txnm->bam.batch_idx==0U) ) ) {
+    /* BAM batch_idx 0 owns immediate verify failures. Later atomic members
+       leave pack to report the first missing member if the prefix is incomplete. */
+    if( FD_UNLIKELY( is_bam && txnm->bam.batch_idx==0U ) ) {
       fd_bam_bundle_result_t bam_res = {
         .seq_id           = txnm->bam.seq_id,
         .slot             = txnm->bam.max_schedule_slot,

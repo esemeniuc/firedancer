@@ -547,14 +547,6 @@ fd_bam_publish_batch( fd_bam_tile_t *            ctx,
     FD_LOG_NOTICE(( "%s", msg ));
   }
 
-  if( FD_UNLIKELY( !packet_cnt || packet_cnt>FD_BAM_STEM_BURST ) ) {
-    FD_LOG_CRIT(( "invalid BAM pending batch size: seq_id=%u max_schedule_slot=%lu packet_cnt=%u revert_on_error=%u",
-                  batch->seq_id,
-                  max_schedule_slot,
-                  (uint)packet_cnt,
-                  (uint)state->revert_on_error ));
-  }
-
   if( FD_UNLIKELY( bam_pending_txn_avail( ctx->pending_txns ) < (ulong)packet_cnt ) ) {
     ctx->metrics.transaction_rejected_backpressure_cnt += packet_cnt;
     fd_bam_enqueue_result( ctx, &(fd_bam_bundle_result_t) {
@@ -579,7 +571,6 @@ fd_bam_publish_batch( fd_bam_tile_t *            ctx,
     pending->sig                         = state->revert_on_error ? 1UL : 0UL;
     pending->batch_idx                   = i;
     pending->batch_cnt                   = packet_cnt;
-    pending->batch_tail                  = (uchar)( i+1U==packet_cnt );
     pending->revert_on_error             = (uchar)state->revert_on_error;
     fd_memcpy( pending->payload, packet->data.bytes, packet->data.size );
   }
@@ -735,11 +726,10 @@ fd_bam_decode_multiple_atomic_txn_batch( fd_bam_tile_t * ctx,
   if( FD_UNLIKELY( seen_batch_count == 0U ) ) {
     FD_LOG_WARNING(( "MultipleAtomicTxnBatch contained no AtomicTxnBatch entries" ));
     ctx->metrics.ingress_message_rejected_cnt[ FD_METRICS_ENUM_BAM_INGRESS_MESSAGE_REJECT_REASON_V_EMPTY_MESSAGE_IDX ]++;
-    bam_types_AtomicTxnBatch batch = bam_types_AtomicTxnBatch_init_default;
     decoded_multi->has_err_result = 1;
     decoded_multi->err_result = (fd_bam_bundle_result_t){
-      .seq_id            = batch.seq_id,
-      .slot              = batch.max_schedule_slot,
+      .seq_id            = 0U,
+      .slot              = 0UL,
       .bundle_txn_cnt    = 0,
       .execution_success = 0,
       .scheduling_error  = FD_BAM_SCHED_ERR_NONE,
@@ -838,7 +828,7 @@ fd_bam_decode_scheduler_response_v0( fd_bam_tile_t * ctx,
     decoded_v0->ping_id = ping.id;
     break;
   }
-  default:
+  case 0:
     break;
   }
   return 1;
@@ -976,7 +966,7 @@ fd_bam_handle_scheduler_response( fd_bam_tile_t * ctx,
     ctx->metrics.scheduler_pong_send_outcome_cnt[ outcome_idx ]++;
     break;
   }
-  default:
+  case FD_BAM_V0_STAGED_NONE:
     break;
   }
   return;

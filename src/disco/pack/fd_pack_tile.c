@@ -140,7 +140,6 @@ static inline void
 pack_tile_record_bam_invalid_reason_count( ulong *                        counts,
                                            pack_tile_bam_invalid_reason_t reason,
                                            uchar                          txn_cnt ) {
-  FD_TEST( reason==PACK_TILE_BAM_INVALID_OUTSIDE_SLOT || reason==PACK_TILE_BAM_INVALID_BLOCKHASH_EXPIRED );
   ulong base = ( txn_cnt==1U ) ? 0UL : 2UL;
   counts[ base + (ulong)reason - 1UL ]++;
 }
@@ -789,7 +788,7 @@ pack_tile_make_bam_invalid_result( uint                           seq_id,
   fd_bam_bundle_result_t res = fd_bam_result_base( seq_id, max_schedule_slot, txn_cnt );
   if( FD_UNLIKELY( reason==PACK_TILE_BAM_INVALID_OUTSIDE_SLOT ) ) {
     res.scheduling_error = FD_BAM_SCHED_ERR_OUTSIDE_SLOT;
-  } else if( FD_UNLIKELY( reason==PACK_TILE_BAM_INVALID_BLOCKHASH_EXPIRED ) ) {
+  } else {
     fd_bam_result_add_txn_error( &res, 0UL, bam_types_TransactionErrorReason_BLOCKHASH_NOT_FOUND );
     fd_bam_result_mark_sanitize_success_all( &res );
   }
@@ -803,13 +802,6 @@ pack_tile_bam_best_known_slot( fd_pack_ctx_t const * ctx ) {
   if( FD_LIKELY( ctx->leader_slot!=ULONG_MAX ) ) return ctx->leader_slot;
   if( FD_LIKELY( ctx->highest_observed_slot ) )  return ctx->highest_observed_slot;
   return ULONG_MAX;
-}
-
-static inline ulong
-pack_tile_bam_funnel_slot( fd_pack_ctx_t const * ctx,
-                           ulong                 max_schedule_slot ) {
-  (void)ctx;
-  return max_schedule_slot;
 }
 
 static inline char const *
@@ -985,11 +977,11 @@ pack_tile_bam_work_find_by_sig0( fd_pack_ctx_t const *       ctx,
 static inline ulong
 pack_tile_bam_work_find_by_any_sig( fd_pack_ctx_t const * ctx,
                                     uchar const           sig[ static 64 ],
-                                    int                   state_filter,
+                                    pack_bam_work_state_t state_filter,
                                     uchar *               matched_idx ) {
   for( ulong i=0UL; i<ctx->bam_work_cnt; i++ ) {
     pack_bam_work_t const * item = &ctx->bam_work[ i ];
-    if( FD_UNLIKELY( state_filter>=0 && item->state!=(uchar)state_filter ) ) continue;
+    if( FD_UNLIKELY( item->state!=(uchar)state_filter ) ) continue;
     for( uchar j=0U; j<item->txn_cnt; j++ ) {
       if( FD_LIKELY( memcmp( item->sig[ j ], sig, sizeof(fd_ed25519_sig_t) ) ) ) continue;
       if( FD_UNLIKELY( matched_idx ) ) *matched_idx = j;
@@ -1282,7 +1274,6 @@ static inline void
 pack_tile_abandon_current_bam_bundle( fd_pack_ctx_t *              ctx,
                                       pack_tile_bam_bundle_assembly_abandon_reason_t reason ) {
   if( FD_UNLIKELY( !ctx->current_bundle->bundle || !ctx->current_bundle_bam->is_bam ) ) return;
-  FD_TEST( reason<=PACK_TILE_BAM_BUNDLE_ASSEMBLY_ABANDON_POH_TIMEOUT );
   ctx->bam_bundle_assembly_abandon_cnt[ (ulong)reason ]++;
   pack_tile_note_bam_first_outcome( ctx,
                                     FD_METRICS_ENUM_PACK_BAM_WORK_FIRST_OUTCOME_V_BUNDLE_ASSEMBLY_ABANDONED_IDX,
@@ -1293,11 +1284,10 @@ pack_tile_abandon_current_bam_bundle( fd_pack_ctx_t *              ctx,
   if( FD_LIKELY( have_sig0 ) ) {
     fd_memcpy( sig0, ctx->current_bundle->_txn[ 0 ]->txnp->payload + 1UL, sizeof(fd_ed25519_sig_t) );
   }
-  FD_TEST( ctx->current_bundle->txn_received<ctx->current_bundle->txn_cnt );
 
   uint  first_missing_idx = (uint)ctx->current_bundle->txn_received;
   _Bool is_new_seq_abandon = reason==PACK_TILE_BAM_BUNDLE_ASSEMBLY_ABANDON_NEW_SEQ_BEFORE_COMPLETE;
-  ulong bam_slot = pack_tile_bam_funnel_slot( ctx, ctx->current_bundle_bam->max_schedule_slot );
+  ulong bam_slot = ctx->current_bundle_bam->max_schedule_slot;
   uint seq_id = (uint)( ctx->current_bundle->id - 1UL );
   pack_tile_log_bam_drop( ctx,
                              "bundle_assembly",
@@ -2113,7 +2103,7 @@ during_frag( fd_pack_ctx_t * ctx,
 
         ctx->current_bundle_bam->max_schedule_slot = txnm->bam.max_schedule_slot;
         ctx->current_bundle_bam->is_bam            = 1;
-        pack_tile_note_bam_received( ctx, pack_tile_bam_funnel_slot( ctx, txnm->bam.max_schedule_slot ), txnm->bam.seq_id, 1UL, txnm->bam.txn_cnt );
+        pack_tile_note_bam_received( ctx, txnm->bam.max_schedule_slot, txnm->bam.seq_id, 1UL, txnm->bam.txn_cnt );
       }
 
       FD_TEST( txnm->bam.txn_cnt==ctx->current_bundle->txn_cnt );
@@ -2398,7 +2388,7 @@ after_frag( fd_pack_ctx_t *     ctx,
       uint seq_id             = (uint)( ctx->current_bundle->id - 1UL );
       uchar txn_cnt           = (uchar)ctx->current_bundle->txn_cnt;
       ulong max_schedule_slot = ctx->current_bundle_bam->max_schedule_slot;
-      ulong bam_slot          = pack_tile_bam_funnel_slot( ctx, max_schedule_slot );
+      ulong bam_slot          = max_schedule_slot;
       ulong min_blockhash_slot = ctx->current_bundle->min_blockhash_slot;
       long first_rx_ts_ns = pack_tile_current_bam_bundle_first_rx_ts_ns( ctx );
       pack_tile_bam_invalid_reason_t invalid_reason =
@@ -2565,7 +2555,7 @@ after_frag( fd_pack_ctx_t *     ctx,
       break;
     }
     case PACK_TILE_BUNDLE_KIND_NONE:
-    default: {
+    {
       if( FD_UNLIKELY( !ctx->cur_spot ) ) break;
       if( FD_UNLIKELY( pack_tile_bam_override_active( ctx ) &&
                        !fd_txn_is_simple_vote_transaction( TXN(ctx->cur_spot->txnp), ctx->cur_spot->txnp->payload ) ) ) {

@@ -407,7 +407,7 @@ after_frag( fd_resolh_tile_t *  ctx,
     buffered transactions to back. */
 
   int is_bam          = txnm->source_tpu==FD_TXN_M_TPU_SOURCE_BAM;
-  int emit_bam_result = is_bam && ( !txnm->bam.revert_on_error || txnm->bam.batch_idx==0U );
+  int emit_bam_result = is_bam && txnm->bam.batch_idx==0U;
 
   if( FD_UNLIKELY( txnm->block_engine.bundle_id && (txnm->block_engine.bundle_id!=ctx->bundle_id) ) ) {
     ctx->bundle_failed = 0;
