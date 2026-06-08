@@ -169,7 +169,7 @@ struct fd_bundle_tile {
   fd_bundle_out_ctx_t       plugin_msg_out;
   fd_bundle_pending_txn_t * pending_txns;
 
-  ulong * bam_status_fseq; /* Shared latch from bam tile (bit 0 = BAM override active, bit 1 = current slot has BAM work) */
+  ulong * bam_status_fseq; /* Shared latch from bam tile (bit 0 = BAM override active) */
   _Bool   bam_override_active; /* true if BAM overrides are currently active */
 
   /* App metrics */
