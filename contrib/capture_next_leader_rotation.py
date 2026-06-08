@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 PROCESSED_COMMITMENT = "processed"
+MAINNET_GENESIS_HASH = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
+PUBLIC_MAINNET_RPC_URL = "https://api.mainnet-beta.solana.com"
 FAST_POLL_WINDOW_SEC = 10.0
 FAST_POLL_INTERVAL_SEC = 1.0
 WEBSOCAT_BUFFER_BYTES = "12000000"
@@ -264,6 +266,16 @@ def parse_args() -> argparse.Namespace:
     )
     capture_p.add_argument("--host", type=non_empty_string, default=os.getenv("HOST", "127.0.0.1"))
     capture_p.add_argument("--rpc-url", type=non_empty_string, default=os.getenv("RPC_URL"))
+    capture_p.add_argument(
+        "--leader-schedule-rpc-url",
+        type=non_empty_string,
+        default=os.getenv("LEADER_SCHEDULE_RPC_URL"),
+        help=(
+            "RPC URL to use for getLeaderSchedule. If omitted, the script tries the primary RPC first "
+            "and automatically falls back to the public mainnet RPC when the primary RPC reports the "
+            "mainnet genesis hash."
+        ),
+    )
     capture_p.add_argument("--metrics-url", type=non_empty_string, default=os.getenv("METRICS_URL"))
     capture_p.add_argument(
         "--bam-only",
@@ -309,13 +321,12 @@ def parse_args() -> argparse.Namespace:
 
     args = p.parse_args(argv)
     if args.cmd == "capture":
-        if args.rpc_url is None:
-            args.rpc_url = f"http://{args.host}:8899"
-        if args.metrics_url is None:
-            args.metrics_url = f"http://{args.host}:7999/metrics"
-    if args.websocket_url is None:
-        args.websocket_url = f"ws://{args.host}:80/websocket"
-    args.websocket_url = args.websocket_url.strip()
+        args.rpc_url = (args.rpc_url or f"http://{args.host}:8899").strip()
+        args.leader_schedule_rpc_url = (
+            args.leader_schedule_rpc_url.strip() if args.leader_schedule_rpc_url else None
+        )
+        args.metrics_url = (args.metrics_url or f"http://{args.host}:7999/metrics").strip()
+    args.websocket_url = (args.websocket_url or f"ws://{args.host}:80/websocket").strip()
     parsed_websocket_url = urllib.parse.urlparse(args.websocket_url)
     if parsed_websocket_url.scheme not in {"ws", "wss"} or not parsed_websocket_url.netloc:
         p.error(
@@ -349,10 +360,25 @@ def rpc_call(rpc_url: str, method: str, params=None) -> Any:
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             body = resp.read()
+    except urllib.error.HTTPError as exc:
+        detail = f"HTTP Error {exc.code}: {exc.reason}"
+        error_body = exc.read().decode("utf-8", errors="replace").strip()
+        if error_body:
+            detail = f"{detail}: {error_body[:500]}"
+        raise RuntimeError(f"RPC call failed for method '{method}': {detail}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"RPC call failed for method '{method}': {exc}") from exc
 
-    return json.loads(body)["result"]
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"RPC response for method '{method}' was not valid JSON") from exc
+
+    if "error" in payload:
+        raise RuntimeError(f"RPC method '{method}' returned error: {payload['error']}")
+    if "result" not in payload:
+        raise RuntimeError(f"RPC response for method '{method}' did not contain a result")
+    return payload["result"]
 
 
 def run_ip_route_json(*args: str) -> list[dict[str, Any]]:
@@ -369,7 +395,46 @@ def run_ip_route_json(*args: str) -> list[dict[str, Any]]:
     return [route for route in payload if isinstance(route, dict)]
 
 
-def get_next_leader_rotation(rpc_url: str, min_start_slot_exclusive: Optional[int] = None) -> tuple[str, int, int, int]:
+def rpc_candidates(rpc_url: str, fallback_url: Optional[str]) -> list[str]:
+    if fallback_url:
+        return list(dict.fromkeys((rpc_url, fallback_url)))
+
+    try:
+        if rpc_call(rpc_url, "getGenesisHash") == MAINNET_GENESIS_HASH:
+            return list(dict.fromkeys((rpc_url, PUBLIC_MAINNET_RPC_URL)))
+    except RuntimeError:
+        pass
+    return [rpc_url]
+
+
+def rpc_call_any(
+    rpc_urls: list[str],
+    method: str,
+    params=None,
+    hint: str = "",
+) -> Any:
+    errors: list[str] = []
+    for idx, rpc_url in enumerate(rpc_urls):
+        try:
+            return rpc_call(rpc_url, method, params)
+        except RuntimeError as exc:
+            errors.append(f"{rpc_url}: {exc}")
+            if idx + 1 < len(rpc_urls):
+                print(
+                    f"warning: {method} failed via {rpc_url}; retrying via {rpc_urls[idx + 1]}",
+                    file=sys.stderr,
+                )
+                continue
+
+    suffix = f"; {hint}" if hint else ""
+    raise RuntimeError(f"unable to call {method}: {'; '.join(errors)}{suffix}")
+
+
+def get_next_leader_rotation(
+    rpc_url: str,
+    min_start_slot_exclusive: Optional[int] = None,
+    leader_schedule_rpc_url: Optional[str] = None,
+) -> tuple[str, int, int, int]:
     identity = rpc_call(rpc_url, "getIdentity")["identity"]
 
     epoch_info = rpc_call(rpc_url, "getEpochInfo")
@@ -381,20 +446,33 @@ def get_next_leader_rotation(rpc_url: str, min_start_slot_exclusive: Optional[in
     if min_start_slot_exclusive is not None:
         search_after_slot = max(search_after_slot, min_start_slot_exclusive)
 
-    schedule = rpc_call(rpc_url, "getLeaderSchedule", [current_slot]) or {}
+    schedule_rpc_urls = rpc_candidates(rpc_url, leader_schedule_rpc_url)
+    schedule_hint = (
+        "pass --leader-schedule-rpc-url or set LEADER_SCHEDULE_RPC_URL "
+        "if this RPC does not serve getLeaderSchedule"
+        if len(schedule_rpc_urls) == 1
+        else ""
+    )
     next_epoch_start_slot = epoch_start_slot + slots_in_epoch
-    next_schedule = rpc_call(rpc_url, "getLeaderSchedule", [next_epoch_start_slot]) or {}
 
-    for schedule_epoch_start_slot, candidate_schedule in (
-        (epoch_start_slot, schedule),
-        (next_epoch_start_slot, next_schedule),
+    for schedule_epoch_start_slot, schedule_slot in (
+        (epoch_start_slot, current_slot),
+        (next_epoch_start_slot, next_epoch_start_slot),
     ):
-        my_slots = sorted({parse_int(slot_idx) for slot_idx in (candidate_schedule.get(identity) or [])})
+        schedule = rpc_call_any(
+            schedule_rpc_urls,
+            "getLeaderSchedule",
+            [schedule_slot, {"identity": identity}],
+            schedule_hint,
+        ) or {}
+        if not isinstance(schedule, dict):
+            raise RuntimeError("RPC getLeaderSchedule returned unexpected result type")
+
+        my_slots = sorted({parse_int(slot_idx) for slot_idx in (schedule.get(identity) or [])})
         if not my_slots:
             continue
 
-        rotation_start_idx = my_slots[0]
-        rotation_end_idx = my_slots[0]
+        rotation_start_idx = rotation_end_idx = my_slots[0]
         for slot_idx in my_slots[1:]:
             if slot_idx == rotation_end_idx + 1:
                 rotation_end_idx = slot_idx
@@ -403,9 +481,7 @@ def get_next_leader_rotation(rpc_url: str, min_start_slot_exclusive: Optional[in
             rotation_start_slot = schedule_epoch_start_slot + rotation_start_idx
             if rotation_start_slot > search_after_slot:
                 return identity, current_slot, rotation_start_slot, schedule_epoch_start_slot + rotation_end_idx
-
-            rotation_start_idx = slot_idx
-            rotation_end_idx = slot_idx
+            rotation_start_idx = rotation_end_idx = slot_idx
 
         rotation_start_slot = schedule_epoch_start_slot + rotation_start_idx
         if rotation_start_slot > search_after_slot:
@@ -414,8 +490,8 @@ def get_next_leader_rotation(rpc_url: str, min_start_slot_exclusive: Optional[in
     raise RuntimeError(f"Identity {identity} has no upcoming leader rotations in current/next epoch")
 
 
-def get_slot_seconds(rpc_url: str) -> float:
-    samples = rpc_call(rpc_url, "getRecentPerformanceSamples", [1]) or []
+def get_slot_seconds(rpc_urls: list[str]) -> float:
+    samples = rpc_call_any(rpc_urls, "getRecentPerformanceSamples", [1]) or []
     if not samples:
         return 0.4
 
@@ -962,8 +1038,10 @@ def capture_next_leader_rotation(
     identity, current_slot, next_leader_slot, next_rotation_end_slot = get_next_leader_rotation(
         args.rpc_url,
         min_start_slot_exclusive=min_start_slot_exclusive,
+        leader_schedule_rpc_url=args.leader_schedule_rpc_url,
     )
-    slot_seconds = get_slot_seconds(args.rpc_url)
+    fallback_rpc_urls = rpc_candidates(args.rpc_url, args.leader_schedule_rpc_url)
+    slot_seconds = get_slot_seconds(fallback_rpc_urls)
 
     slots_before_start = max(1, math.ceil(args.capture_lead_time_sec / slot_seconds))
     start_slot = max(0, next_leader_slot - slots_before_start)
