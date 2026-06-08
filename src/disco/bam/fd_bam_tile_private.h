@@ -33,7 +33,6 @@ struct fd_bam_pending_txn {
   uint   scheduler_arrival_tspub;
   uint   source_ipv4;
   ulong  max_schedule_slot;
-  ulong  sig;
   uchar  batch_idx;
   uchar  batch_cnt;
   uchar  revert_on_error;

@@ -33,7 +33,6 @@ typedef struct {
 } fd_bam_decoded_multi_batch_t;
 
 typedef enum {
-  FD_BAM_V0_STAGED_NONE      = 0,
   FD_BAM_V0_STAGED_HEARTBEAT = 1,
   FD_BAM_V0_STAGED_MULTI     = 2,
   FD_BAM_V0_STAGED_PING      = 3
@@ -568,7 +567,6 @@ fd_bam_publish_batch( fd_bam_tile_t *            ctx,
     pending->scheduler_arrival_tspub     = scheduler_arrival_tspub;
     pending->source_ipv4                 = 0U;
     pending->max_schedule_slot           = max_schedule_slot;
-    pending->sig                         = state->revert_on_error ? 1UL : 0UL;
     pending->batch_idx                   = i;
     pending->batch_cnt                   = packet_cnt;
     pending->revert_on_error             = (uchar)state->revert_on_error;
@@ -678,7 +676,6 @@ fd_bam_decode_multiple_atomic_txn_batch( fd_bam_tile_t * ctx,
                                             &overflow_batch );
       pb_close_string_substream( stream, &substream );
       if( FD_UNLIKELY( !ok ) ) {
-        decoded_multi->batch_cnt = 0U;
         return 1;
       }
 
@@ -714,7 +711,6 @@ fd_bam_decode_multiple_atomic_txn_batch( fd_bam_tile_t * ctx,
          not-committed result is already enqueued at the batch layer. Do not
          bubble it up as a scheduler-envelope failure. Drop any earlier staged
          batches so the message cannot partially publish. */
-      decoded_multi->batch_cnt = 0U;
       return 1;
     }
     seen_batch_count++;
@@ -789,6 +785,10 @@ fd_bam_decode_scheduler_response_v0( fd_bam_tile_t * ctx,
     if( FD_UNLIKELY( !pb_close_string_substream( stream, &substream ) ) ) return 0;
   }
   if( FD_UNLIKELY( !eof ) ) return 0;
+  if( FD_UNLIKELY( !selected_tag ) ) {
+    PB_SET_ERROR( stream, "missing v0 response" );
+    return 0;
+  }
 
   switch( selected_tag ) {
   case bam_api_SchedulerResponseV0_heart_beat_tag: {
@@ -828,8 +828,6 @@ fd_bam_decode_scheduler_response_v0( fd_bam_tile_t * ctx,
     decoded_v0->ping_id = ping.id;
     break;
   }
-  case 0:
-    break;
   }
   return 1;
 }
@@ -966,8 +964,6 @@ fd_bam_handle_scheduler_response( fd_bam_tile_t * ctx,
     ctx->metrics.scheduler_pong_send_outcome_cnt[ outcome_idx ]++;
     break;
   }
-  case FD_BAM_V0_STAGED_NONE:
-    break;
   }
   return;
 

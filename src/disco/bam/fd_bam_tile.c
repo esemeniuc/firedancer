@@ -918,8 +918,7 @@ after_credit( fd_bam_tile_t *  ctx,
   ulong drain_cnt = 0UL;
   while( FD_LIKELY( !bam_pending_txn_empty( ctx->pending_txns ) ) && FD_LIKELY( drain_cnt<STEM_BURST ) ) {
     fd_bam_pending_txn_t const * head = bam_pending_txn_peek_head_const( ctx->pending_txns );
-    _Bool batch_revert = !!head->revert_on_error;
-    ulong batch_cnt    = batch_revert ? (ulong)head->batch_cnt : 1UL;
+    ulong batch_cnt = (ulong)head->batch_cnt;
 
     if( FD_UNLIKELY( drain_cnt + batch_cnt > STEM_BURST ) ) break;
 
@@ -952,7 +951,7 @@ after_credit( fd_bam_tile_t *  ctx,
       ulong sz = fd_txn_m_realized_footprint( txnm, 0, 0 );
       fd_stem_publish( stem,
                        ctx->verify_out.idx,
-                       pending->sig,
+                       pending->revert_on_error ? 1UL : 0UL,
                        ctx->verify_out.chunk,
                        sz,
                        0UL,
@@ -961,7 +960,7 @@ after_credit( fd_bam_tile_t *  ctx,
       ctx->verify_out.chunk = fd_dcache_compact_next( ctx->verify_out.chunk, sz, ctx->verify_out.chunk0, ctx->verify_out.wmark );
       if( FD_UNLIKELY( i+1UL==batch_cnt ) ) {
         ctx->metrics.ingress_batch_published_cnt++;
-        if( FD_UNLIKELY( batch_revert ) ) ctx->metrics.atomic_batch_published_cnt++;
+        if( FD_UNLIKELY( pending->revert_on_error ) ) ctx->metrics.atomic_batch_published_cnt++;
       }
       bam_pending_txn_remove_head( ctx->pending_txns );
       drain_cnt++;
