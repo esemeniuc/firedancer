@@ -2435,7 +2435,7 @@ test_bam_scheduler_stream_replays_only_retained_leader_state( fd_wksp_t * wksp )
     .slot = 41UL,
     .tick = 12U,
     .slot_cu_budget_remaining = 321U,
-    .slot_end_ns = g_clock - 1L,
+    .slot_end_ns = g_clock - FD_BAM_LEADER_STATE_EXPIRY_GRACE_NS - 1L,
     .current_slot_has_bam_work = 1U
   };
   state->bam_leader_pending = 1U;
@@ -2446,9 +2446,9 @@ test_bam_scheduler_stream_replays_only_retained_leader_state( fd_wksp_t * wksp )
 
   state->bam_leader_state = (fd_bam_leader_state_t){
     .slot = 42UL,
-    .tick = 7U,
-    .slot_cu_budget_remaining = 123U,
-    .slot_end_ns = g_clock + (long)1e9,
+    .tick = 8U,
+    .slot_cu_budget_remaining = 456U,
+    .slot_end_ns = g_clock - FD_BAM_LEADER_STATE_EXPIRY_GRACE_NS + 1L,
     .current_slot_has_bam_work = 1U
   };
   state->bam_leader_pending = 0U;
@@ -2468,6 +2468,32 @@ test_bam_scheduler_stream_replays_only_retained_leader_state( fd_wksp_t * wksp )
   FD_TEST( decoded.msg.versioned_msg.v0.which_msg == bam_api_SchedulerMessageV0_leader_state_tag );
   bam_types_LeaderState const * ls = &decoded.msg.versioned_msg.v0.msg.leader_state;
   FD_TEST( ls->slot == 42UL );
+  FD_TEST( ls->tick == 8U );
+  FD_TEST( ls->slot_cu_budget_remaining == 456U );
+
+  state->bam_leader_state = (fd_bam_leader_state_t){
+    .slot = 43UL,
+    .tick = 7U,
+    .slot_cu_budget_remaining = 123U,
+    .slot_end_ns = g_clock + (long)1e9,
+    .current_slot_has_bam_work = 1U
+  };
+  state->bam_leader_pending = 0U;
+  state->bam_stream_live       = 0U;
+  state->bam_stream_connecting = 1U;
+
+  fd_bam_client_grpc_rx_start( state, FD_BAM_CLIENT_REQ_BAM_InitSchedulerStream );
+  FD_TEST( state->bam_leader_pending == 1U );
+
+  busy = fd_bam_test_client_step_reconnect( state, g_clock );
+  FD_TEST( busy == 1 );
+  FD_TEST( state->bam_leader_pending == 0U );
+
+  test_bam_decode_last_message( state, &decoded );
+  FD_TEST( decoded.msg.which_versioned_msg == bam_api_SchedulerMessage_v0_tag );
+  FD_TEST( decoded.msg.versioned_msg.v0.which_msg == bam_api_SchedulerMessageV0_leader_state_tag );
+  ls = &decoded.msg.versioned_msg.v0.msg.leader_state;
+  FD_TEST( ls->slot == 43UL );
   FD_TEST( ls->tick == 7U );
   FD_TEST( ls->slot_cu_budget_remaining == 123U );
 

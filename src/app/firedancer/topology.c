@@ -882,13 +882,6 @@ fd_topo_initialize( config_t * config ) {
     /**/                 fd_topob_tile_in(  topo, "bundle", 0UL,           "metric_in", "sign_bundle",    0UL,        FD_TOPOB_UNRELIABLE, FD_TOPOB_UNPOLLED );
     /**/                 fd_topob_tile_out( topo, "sign",   0UL,                        "sign_bundle",    0UL                                                );
 
-    if( leader_enabled ) {
-      /**/               fd_topob_tile_in(  topo, "sign",   0UL,           "metric_in", "pack_sign",      0UL,        FD_TOPOB_UNRELIABLE, FD_TOPOB_POLLED   );
-      /**/               fd_topob_tile_out( topo, "pack",   0UL,                        "pack_sign",      0UL                                                );
-      /**/               fd_topob_tile_in(  topo, "pack",   0UL,           "metric_in", "sign_pack",      0UL,        FD_TOPOB_UNRELIABLE, FD_TOPOB_UNPOLLED );
-      /**/               fd_topob_tile_out( topo, "sign",   0UL,                        "sign_pack",      0UL                                                );
-    }
-
     if( leader_enabled ) fd_topob_tile_in(  topo, "bundle", 0UL,           "metric_in", "replay_out",     0UL,        FD_TOPOB_UNRELIABLE, FD_TOPOB_POLLED   );
 
     if( config->tiles.gui.enabled ) { /* GUI is the only consumer of bundle_status */

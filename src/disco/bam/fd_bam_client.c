@@ -1160,7 +1160,8 @@ fd_bam_client_grpc_rx_start(
       ctx->bam_leader_state = (fd_bam_leader_state_t){ .slot = ULONG_MAX };
       ctx->bam_leader_pending = 0U;
     } else if( ctx->bam_leader_state.slot != ULONG_MAX &&
-               ctx->bam_leader_state.slot_end_ns > now ) {
+               ctx->bam_leader_state.slot_end_ns &&
+               fd_long_sat_add( ctx->bam_leader_state.slot_end_ns, FD_BAM_LEADER_STATE_EXPIRY_GRACE_NS ) > now ) {
       ctx->bam_leader_pending = 1U;
     } else {
       ctx->bam_leader_pending = 0U;

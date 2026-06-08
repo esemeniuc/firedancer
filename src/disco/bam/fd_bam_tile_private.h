@@ -13,6 +13,7 @@
 #include "../../waltz/grpc/fd_grpc_client.h"
 #include "../../waltz/resolv/fd_netdb.h"
 #include "../../waltz/fd_rtt_est.h"
+#include "../../util/bits/fd_sat.h"
 #include "../../util/net/fd_net_headers.h"
 #include "proto/bam_api.pb.h"
 #include "proto/bam_types.pb.h"
@@ -21,6 +22,7 @@ struct fd_bam_tile;
 typedef struct fd_bam_tile fd_bam_tile_t;
 
 #define FD_BAM_ACTIVITY_TIMEOUT_NS ((long)6e9) /* 6 seconds */
+#define FD_BAM_LEADER_STATE_EXPIRY_GRACE_NS ((long)10e6) /* 10 ms */
 #define FD_BAM_LEADER_SCHEDULE_RECHECK_SLOT_DELTA 64UL
 #define FD_BAM_LEADER_SCHEDULE_RECHECK_WALLCLOCK_NS ((long)15e9)
 #define FD_BAM_LEADER_SCHEDULE_RECHECK_DUE_SLOT 0UL
@@ -550,7 +552,8 @@ fd_bam_leader_state_suppress_reason( fd_bam_tile_t const *                  ctx,
     return 1;
   }
 
-  if( FD_UNLIKELY( state->slot_end_ns && state->slot_end_ns<=now_ns ) ) {
+  if( FD_UNLIKELY( state->slot_end_ns &&
+                   fd_long_sat_add( state->slot_end_ns, FD_BAM_LEADER_STATE_EXPIRY_GRACE_NS )<=now_ns ) ) {
     *reason = FD_BAM_LEADER_STATE_SUPPRESS_EXPIRED;
     return 1;
   }
