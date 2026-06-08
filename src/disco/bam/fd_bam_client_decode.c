@@ -935,30 +935,28 @@ fd_bam_handle_scheduler_response( fd_bam_tile_t * ctx,
     /* Scheduler proto Ping is only a latency probe. It must be answered on
        the protobuf stream, but it does not refresh the builder-activity
        watchdog or HTTP/2 keepalive state. */
-    ulong outcome_idx = FD_METRICS_ENUM_BAM_SCHEDULER_PONG_SEND_OUTCOME_V_NO_LIVE_STREAM_IDX;
-    if( FD_LIKELY( ctx->grpc_client && ctx->bam_stream && ctx->bam_stream_live ) ) {
-      ulong rx_ts_u = fd_ulong_if( rx_ts_ns >= 0L, (ulong)rx_ts_ns, 0UL );
-      long  now_ns  = fd_bam_now();
-      ulong now_u   = fd_ulong_if( now_ns >= 0L, (ulong)now_ns, 0UL );
-      fd_histf_sample( ctx->metrics.scheduler_pong_send_nanos, fd_ulong_sat_sub( now_u, rx_ts_u ) );
+    if( FD_UNLIKELY( !( ctx->grpc_client && ctx->bam_stream && ctx->bam_stream_live ) ) ) break;
 
-      bam_api_SchedulerMessage msg = bam_api_SchedulerMessage_init_default;
-      msg.which_versioned_msg        = bam_api_SchedulerMessage_v0_tag;
-      msg.versioned_msg.v0.which_msg = bam_api_SchedulerMessageV0_pong_tag;
-      msg.versioned_msg.v0.msg.pong.id = decoded_v0.ping_id;
+    ulong rx_ts_u = fd_ulong_if( rx_ts_ns >= 0L, (ulong)rx_ts_ns, 0UL );
+    long  now_ns  = fd_bam_now();
+    ulong now_u   = fd_ulong_if( now_ns >= 0L, (ulong)now_ns, 0UL );
+    fd_histf_sample( ctx->metrics.scheduler_pong_send_nanos, fd_ulong_sat_sub( now_u, rx_ts_u ) );
 
-      int send_ok = fd_grpc_client_stream_send_msg( ctx->grpc_client, ctx->bam_stream, &bam_api_SchedulerMessage_msg, &msg );
-      if( FD_LIKELY( send_ok ) ) {
-        outcome_idx = FD_METRICS_ENUM_BAM_SCHEDULER_PONG_SEND_OUTCOME_V_ENQUEUED_IDX;
+    bam_api_SchedulerMessage msg = bam_api_SchedulerMessage_init_default;
+    msg.which_versioned_msg        = bam_api_SchedulerMessage_v0_tag;
+    msg.versioned_msg.v0.which_msg = bam_api_SchedulerMessageV0_pong_tag;
+    msg.versioned_msg.v0.msg.pong.id = decoded_v0.ping_id;
+
+    ulong outcome_idx = FD_METRICS_ENUM_BAM_SCHEDULER_PONG_SEND_OUTCOME_V_ENQUEUED_IDX;
+    int send_ok = fd_grpc_client_stream_send_msg( ctx->grpc_client, ctx->bam_stream, &bam_api_SchedulerMessage_msg, &msg );
+    if( FD_UNLIKELY( !send_ok ) ) {
+      if( FD_UNLIKELY( !fd_h2_rbuf_is_empty( fd_grpc_client_rbuf_tx( ctx->grpc_client ) ) ) ) {
+        outcome_idx = FD_METRICS_ENUM_BAM_SCHEDULER_PONG_SEND_OUTCOME_V_FRAME_TX_BUSY_IDX;
+      } else if( FD_UNLIKELY( fd_grpc_client_request_stream_busy( ctx->grpc_client ) ) ) {
+        outcome_idx = FD_METRICS_ENUM_BAM_SCHEDULER_PONG_SEND_OUTCOME_V_REQUEST_BUSY_IDX;
       } else {
-        if( FD_UNLIKELY( !fd_h2_rbuf_is_empty( fd_grpc_client_rbuf_tx( ctx->grpc_client ) ) ) ) {
-          outcome_idx = FD_METRICS_ENUM_BAM_SCHEDULER_PONG_SEND_OUTCOME_V_FRAME_TX_BUSY_IDX;
-        } else if( FD_UNLIKELY( fd_grpc_client_request_stream_busy( ctx->grpc_client ) ) ) {
-          outcome_idx = FD_METRICS_ENUM_BAM_SCHEDULER_PONG_SEND_OUTCOME_V_REQUEST_BUSY_IDX;
-        } else {
-          outcome_idx = FD_METRICS_ENUM_BAM_SCHEDULER_PONG_SEND_OUTCOME_V_SEND_FAIL_IDX;
-          FD_LOG_WARNING(( "Failed to send BAM scheduler pong (id=%u)", decoded_v0.ping_id ));
-        }
+        outcome_idx = FD_METRICS_ENUM_BAM_SCHEDULER_PONG_SEND_OUTCOME_V_SEND_FAIL_IDX;
+        FD_LOG_WARNING(( "Failed to send BAM scheduler pong (id=%u)", decoded_v0.ping_id ));
       }
     }
     ctx->metrics.scheduler_pong_send_outcome_cnt[ outcome_idx ]++;

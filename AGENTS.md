@@ -50,7 +50,7 @@ Current Full Firedancer Tile Flow (src/app/firedancer/topology.c)
     bank/verify tiles --bank_bam--> bam tile
     bam tile --bam_shred--> shred tile
     bam tile --bam_plugi--> plugin tile (plugin/GUI enabled)
-    bam tile --bam_status fseq--> quic/bundle tiles; mapped read-only into verify
+    bam tile --bam_status fseq--> pack/bundle tiles
     bam tile <-> bam_ctrl shared object; bam tile --bam_fee_cfg--> pack tile
     bam tile --bam_sign--> sign tile --sign_bam--> bam tile
 
@@ -74,9 +74,8 @@ Current Full Firedancer Tile Flow (src/app/firedancer/topology.c)
       while BAM shred forwarding is active.
     bam_plugi: BAM publishes `fd_plugin_msg_bam_update_t` status/config updates for the
       plugin/GUI path when plugin output is enabled.
-    bam_status fseq: BAM writes override/current-work bits. QUIC and bundle tiles consult
-      this latch to suppress normal ingress while BAM owns TPU work; verify maps it read-only
-      in the current fdctl topology but does not currently query it.
+    bam_status fseq: BAM writes the override-active bit. Pack and bundle tiles consult
+      this latch to suppress non-BAM work while BAM owns TPU work.
     bam_ctrl: Shared admin-control object used by CLI/RPC and BAM for set/get BAM URL,
       enable/disable state, and success/error/current-status handoff.
     bam_fee_cfg: Shared fee configuration written by BAM from scheduler config and read by

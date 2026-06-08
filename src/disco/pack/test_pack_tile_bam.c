@@ -200,12 +200,6 @@ test_pack_tile_result_out( test_pack_tile_out_t const * out ) {
   };
 }
 
-static pack_bam_recent_slot_t const *
-test_pack_tile_recent_slot( test_pack_tile_harness_t const * h,
-                            ulong                            slot ) {
-  return &h->ctx->bam_recent_slot[ slot & ( FD_PACK_BAM_RECENT_SLOT_CNT - 1UL ) ];
-}
-
 static fd_bam_bundle_result_t const *
 test_pack_tile_assert_last_result( test_pack_tile_harness_t const * h,
                                    uint                             seq_id,
@@ -277,15 +271,7 @@ test_pack_tile_mark_bam_work_scheduled( test_pack_tile_harness_t * h,
   pack_bam_work_t * item = &h->ctx->bam_work[ work_idx ];
   FD_TEST( item->state==PACK_BAM_WORK_STATE_PENDING );
 
-  if( FD_UNLIKELY( item->slot==ULONG_MAX ) ) {
-    h->ctx->bam_unresolved_work.scheduled_items += 1UL;
-    h->ctx->bam_unresolved_work.scheduled_txns  += item->txn_cnt;
-  } else {
-    pack_bam_recent_slot_t * recent = pack_tile_bam_recent_slot_prepare( h->ctx, item->slot );
-    recent->scheduled_items += 1UL;
-    recent->scheduled_txns  += item->txn_cnt;
-  }
-  pack_tile_bam_recent_slot_sub_pending( h->ctx, item->slot, 1UL, item->txn_cnt );
+  pack_tile_note_bam_work_stage( h->ctx, FD_METRICS_ENUM_PACK_BAM_WORK_STAGE_V_SCHEDULED_IDX, 1UL );
   item->state             = PACK_BAM_WORK_STATE_SCHEDULED;
   item->remaining_txn_cnt = item->txn_cnt;
   h->ctx->bam_pending_work_cnt--;
@@ -542,12 +528,8 @@ test_pack_tile_bam_stale_max_schedule_slot_rejected( void ) {
   FD_TEST( h->ctx->bam_scheduled_work_cnt == 0UL );
   FD_TEST( h->ctx->bam_pending_result_cnt == 1UL );
 
-  pack_bam_recent_slot_t const * recent = test_pack_tile_recent_slot( h, 100UL );
-  FD_TEST( recent->slot == 100UL );
-  FD_TEST( recent->pending_items == 0UL );
-  FD_TEST( recent->pending_txns == 0UL );
-  FD_TEST( recent->evicted_post_pending_items == 1UL );
-  FD_TEST( recent->evicted_post_pending_txns == 2UL );
+  FD_TEST( h->ctx->bam_work_item_stage_cnt[ FD_METRICS_ENUM_PACK_BAM_WORK_STAGE_V_PENDING_ENTERED_IDX ] == 1UL );
+  FD_TEST( h->ctx->bam_work_item_stage_cnt[ FD_METRICS_ENUM_PACK_BAM_WORK_STAGE_V_PENDING_EVICTED_IDX ] == 1UL );
 
   FD_TEST( pack_tile_drain_one_pending_bam_result( h->ctx, &h->out->stem ) );
   FD_TEST( h->ctx->bam_pending_result_cnt == 0UL );
@@ -614,9 +596,7 @@ test_pack_tile_bam_same_seq_pending_duplicate_replaces_before_insert( void ) {
   FD_TEST( pack_tile_track_bam_work( h->ctx, old_sigs, 10L, 10U, 100UL, 100UL, 100UL, 2U ) );
   FD_TEST( h->ctx->bam_work_cnt == 1UL );
   FD_TEST( h->ctx->bam_pending_work_cnt == 1UL );
-  pack_bam_recent_slot_t const * old_recent = test_pack_tile_recent_slot( h, 100UL );
-  FD_TEST( old_recent->pending_items == 1UL );
-  FD_TEST( old_recent->pending_txns == 2UL );
+  FD_TEST( h->ctx->bam_work_item_stage_cnt[ FD_METRICS_ENUM_PACK_BAM_WORK_STAGE_V_PENDING_ENTERED_IDX ] == 1UL );
 
   test_pack_tile_complete_bam_bundle( h, new_txn, 1U, 10U, 101UL, 101UL );
 
@@ -630,11 +610,8 @@ test_pack_tile_bam_same_seq_pending_duplicate_replaces_before_insert( void ) {
   FD_TEST( h->ctx->bam_pending_work_cnt == 1UL );
   FD_TEST( h->ctx->bam_scheduled_work_cnt == 0UL );
   FD_TEST( h->ctx->bam_pending_result_cnt == 0UL );
-  FD_TEST( old_recent->pending_items == 0UL );
-  FD_TEST( old_recent->pending_txns == 0UL );
-  pack_bam_recent_slot_t const * new_recent = test_pack_tile_recent_slot( h, 101UL );
-  FD_TEST( new_recent->pending_items == 1UL );
-  FD_TEST( new_recent->pending_txns == 1UL );
+  FD_TEST( h->ctx->bam_work_item_stage_cnt[ FD_METRICS_ENUM_PACK_BAM_WORK_STAGE_V_PENDING_ENTERED_IDX ] == 2UL );
+  FD_TEST( h->ctx->bam_work_item_stage_cnt[ FD_METRICS_ENUM_PACK_BAM_WORK_STAGE_V_ACCEPTED_IDX ] == 1UL );
 
   ulong work_idx = pack_tile_bam_work_find_by_sig0( h->ctx, new_txn[ 0 ].txnp->payload + 1UL );
   FD_TEST( work_idx<h->ctx->bam_work_cnt );
@@ -662,9 +639,7 @@ test_pack_tile_bam_different_seq_pending_duplicate_rejected_before_insert( void 
   FD_TEST( pack_tile_track_bam_work( h->ctx, old_sigs, 10L, 10U, 100UL, 100UL, 100UL, 2U ) );
   FD_TEST( h->ctx->bam_work_cnt == 1UL );
   FD_TEST( h->ctx->bam_pending_work_cnt == 1UL );
-  pack_bam_recent_slot_t const * old_recent = test_pack_tile_recent_slot( h, 100UL );
-  FD_TEST( old_recent->pending_items == 1UL );
-  FD_TEST( old_recent->pending_txns == 2UL );
+  FD_TEST( h->ctx->bam_work_item_stage_cnt[ FD_METRICS_ENUM_PACK_BAM_WORK_STAGE_V_PENDING_ENTERED_IDX ] == 1UL );
 
   test_pack_tile_complete_bam_bundle( h, new_txn, 1U, 11U, 101UL, 101UL );
 
@@ -678,18 +653,13 @@ test_pack_tile_bam_different_seq_pending_duplicate_rejected_before_insert( void 
   FD_TEST( h->ctx->bam_work_cnt == 1UL );
   FD_TEST( h->ctx->bam_pending_work_cnt == 1UL );
   FD_TEST( h->ctx->bam_scheduled_work_cnt == 0UL );
-  FD_TEST( old_recent->pending_items == 1UL );
-  FD_TEST( old_recent->pending_txns == 2UL );
+  FD_TEST( h->ctx->bam_work_item_stage_cnt[ FD_METRICS_ENUM_PACK_BAM_WORK_STAGE_V_REJECTED_PRE_PENDING_IDX ] == 1UL );
 
   ulong work_idx = pack_tile_bam_work_find_by_sig0( h->ctx, old_sigs );
   FD_TEST( work_idx<h->ctx->bam_work_cnt );
   FD_TEST( h->ctx->bam_work[ work_idx ].seq_id == 10U );
   FD_TEST( h->ctx->bam_work[ work_idx ].state == PACK_BAM_WORK_STATE_PENDING );
   FD_TEST( h->ctx->bam_work[ work_idx ].txn_cnt == 2U );
-
-  pack_bam_recent_slot_t const * new_recent = test_pack_tile_recent_slot( h, 101UL );
-  FD_TEST( new_recent->rejected_pre_pending_items == 1UL );
-  FD_TEST( new_recent->rejected_pre_pending_txns == 1UL );
 
   FD_TEST( h->ctx->bam_pending_result_cnt == 1UL );
   FD_TEST( pack_tile_drain_one_pending_bam_result( h->ctx, &h->out->stem ) );
@@ -738,12 +708,8 @@ test_pack_tile_bam_scheduled_duplicate_rejected_before_insert( void ) {
   FD_TEST( h->ctx->bam_work[ work_idx ].seq_id == 20U );
   FD_TEST( h->ctx->bam_work[ work_idx ].state == PACK_BAM_WORK_STATE_SCHEDULED );
 
-  pack_bam_recent_slot_t const * old_recent = test_pack_tile_recent_slot( h, 100UL );
-  FD_TEST( old_recent->scheduled_items == 1UL );
-  FD_TEST( old_recent->scheduled_txns == 1UL );
-  pack_bam_recent_slot_t const * new_recent = test_pack_tile_recent_slot( h, 101UL );
-  FD_TEST( new_recent->rejected_pre_pending_items == 1UL );
-  FD_TEST( new_recent->rejected_pre_pending_txns == 2UL );
+  FD_TEST( h->ctx->bam_work_item_stage_cnt[ FD_METRICS_ENUM_PACK_BAM_WORK_STAGE_V_SCHEDULED_IDX ] == 1UL );
+  FD_TEST( h->ctx->bam_work_item_stage_cnt[ FD_METRICS_ENUM_PACK_BAM_WORK_STAGE_V_REJECTED_PRE_PENDING_IDX ] == 1UL );
 
   FD_TEST( h->ctx->bam_pending_result_cnt == 1UL );
   FD_TEST( pack_tile_drain_one_pending_bam_result( h->ctx, &h->out->stem ) );
@@ -931,10 +897,7 @@ test_pack_tile_bam_result_mapping_tracking_reject( void ) {
   FD_TEST( h->ctx->bam_tracking_rejected_cnt == 1UL );
   FD_TEST( h->ctx->bam_tracking_rejected_txn_cnt == 2UL );
 
-  pack_bam_recent_slot_t const * recent = test_pack_tile_recent_slot( h, 200UL );
-  FD_TEST( recent->slot == 200UL );
-  FD_TEST( recent->rejected_pre_pending_items == 1UL );
-  FD_TEST( recent->rejected_pre_pending_txns == 2UL );
+  FD_TEST( h->ctx->bam_work_item_stage_cnt[ FD_METRICS_ENUM_PACK_BAM_WORK_STAGE_V_REJECTED_PRE_PENDING_IDX ] == 1UL );
 
   FD_TEST( h->ctx->bam_pending_result_cnt == 1UL );
   FD_TEST( pack_tile_drain_one_pending_bam_result( h->ctx, &h->out->stem ) );

@@ -314,7 +314,7 @@ struct fd_bam_tile {
   fd_bam_out_ctx_t    plugin_out;                    /* Output ring for plugin status updates */
   fd_bam_out_ctx_t    gossip_out;       /* Stem output buffer used for BAM gossip updates (Full firedancer, not Frankendncer) */
   fd_bam_out_ctx_t    shred_out;        /* Stem output buffer used for BAM shred receiver updates */
-  ulong *             bam_status_fseq; /* Shared latch written with BAM status bits (bit 0 = override active, bit 1 = current slot has BAM work) */
+  ulong *             bam_status_fseq; /* Shared latch written with BAM status bits (bit 0 = override active) */
   ulong *             bam_gossip_fseq; /* Gossip tile's bam_gossip consumer fseq, read-only for activation handoff. */
   ulong               bam_gossip_handoff_target; /* Consumer fseq value required before first activating bam_status. */
   uint                bam_gossip_handoff_pending : 1; /* Waiting for gossip to consume the published BAM contact. */
@@ -575,14 +575,6 @@ fd_bam_note_leader_state_suppressed( fd_bam_tile_t *                       ctx,
                    ctx->bam_leader_state.slot_end_ns,
                    (uint)ctx->bam_leader_pending,
                    (uint)state->current_slot_has_bam_work ));
-}
-
-FD_FN_PURE static inline _Bool
-fd_bam_current_slot_has_bam_work( fd_bam_tile_t const * ctx,
-                                  long                   now_ns ) {
-  return !!( ctx->bam_leader_state.slot_end_ns &&
-             now_ns < ctx->bam_leader_state.slot_end_ns &&
-             ctx->bam_leader_state.current_slot_has_bam_work );
 }
 
 /* Define 'request_ctx' IDs to identify different types of gRPC calls */

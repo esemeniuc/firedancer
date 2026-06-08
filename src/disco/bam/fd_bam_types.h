@@ -64,8 +64,7 @@ fd_bam_leader_state_eq( fd_bam_leader_state_t const * a,
              a->current_slot_has_bam_work== b->current_slot_has_bam_work );
 }
 
-#define FD_BAM_STATUS_FSEQ_OVERRIDE_ACTIVE    (1UL<<0)
-#define FD_BAM_STATUS_FSEQ_CURRENT_SLOT_HAS_BAM_WORK (1UL<<1)
+#define FD_BAM_STATUS_FSEQ_OVERRIDE_ACTIVE (1UL<<0)
 
 typedef struct {
   fd_ip4_port_t tpu;               /* TPU socket advertised by BAM (net order). */

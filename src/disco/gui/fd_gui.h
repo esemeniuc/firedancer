@@ -781,32 +781,6 @@ struct fd_gui {
     float  keepalive_rtt_smoothed;
     float  keepalive_rtt_deviation;
     ushort feedback_queue_depth;
-    ulong  outbound_heartbeat_enqueued;
-    ulong  outbound_heartbeat_enqueue_fail;
-    ulong  builder_heartbeats_decoded;
-    ulong  transaction_published;
-    ulong  atomic_batch_published;
-    ulong  ingress_packet_oversize;
-    ulong  failure_auth_challenge_decode;
-    ulong  failure_config_decode;
-    ulong  failure_scheduler_envelope_decode;
-    ulong  failure_request_failed;
-    ulong  failure_resolve;
-    ulong  failure_connect;
-    ulong  failure_io;
-    ulong  failure_unsupported_version;
-    ulong  failure_request_timeout;
-    ulong  failure_keepalive_timeout;
-    ulong  failure_builder_activity_timeout;
-    ulong  ingress_multi_message_received;
-    ulong  ingress_batch_commit_attempt;
-    ulong  ingress_batch_published;
-    ulong  ingress_batch_rejected_invalid_batch;
-    ulong  ingress_batch_rejected_empty_batch;
-    ulong  ingress_batch_rejected_vote_transaction;
-    ulong  ingress_batch_rejected_non_revert_multi_packet;
-    ulong  ingress_message_rejected_empty_message;
-    ulong  ingress_message_rejected_overflow_message;
   } bam;
 
   struct {

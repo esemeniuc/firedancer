@@ -111,7 +111,7 @@ This section covers the BAM links currently wired in `src/app/fdctl/topology.c` 
 | `bank_bam[i]` | `0..bank_tile_cnt-1` | `bank[i]` | `bam` | Reliable, polled | `FD_BAM_MAX_PENDING_RESULTS` | `sizeof(fd_bam_bundle_result_t)`, burst `1` | `bank_bam`; BAM enabled | Durable executed bundle results from bank tiles. BAM enqueues into the same FIFO as `pack_bam_res`. |
 | `bank_bam[bank_tile_cnt+i]` | `bank_tile_cnt..bank_tile_cnt+verify_tile_cnt-1` | `verify[i]` | `bam` | Reliable, polled | `FD_BAM_MAX_PENDING_RESULTS` | `sizeof(fd_bam_bundle_result_t)`, burst `1` | `bank_bam`; BAM enabled | BAM parse/signature failure reports from verify. Same durable FIFO semantics. |
 | `bam_shred` | `0` | `bam` | all `shred` tiles | Reliable, polled | `128` | `sizeof(fd_bam_shred_update_t)`, burst `1` | `bam_shred`; BAM enabled | BAM shred receiver list update. Published with `FD_BAM_STEM_SIG_SHRED_UPDATE`; shred validates size and signal before replacing BAM destinations. |
-| `bam_plugi` | `0` | `bam` | `plugin` | Reliable, polled | `65536` | `sizeof(fd_plugin_msg_bam_update_t)`, burst `1` | `bam_plugi`; BAM and plugin/GUI enabled | BAM status/config metrics to plugin/GUI. |
+| `bam_plugi` | `0` | `bam` | `plugin` | Reliable, polled | `65536` | `sizeof(fd_plugin_msg_bam_update_t)`, burst `1` | `bam_plugi`; BAM and plugin/GUI enabled | BAM status/config to plugin/GUI. |
 
 The BAM tile also has an external gRPC/TLS scheduler boundary. Inbound scheduler batches are converted into `bam_verif` fragments. Outbound feedback uses the same scheduler stream: `pack_bam_ldr` is sent as leader state messages, while `pack_bam_res` and `bank_bam` feed result messages.
 
@@ -136,7 +136,7 @@ The fdctl topology uses the same QUIC/verify/dedup shape but with Agave bank/PoH
 | `bank_busy` objects stored under property key `execle_busy.%lu` | `pohh` | `pack` | fdctl | Same role for Frankendancer bank/PoH path. The property key name is currently reused as `execle_busy.%lu`. |
 | `pohh_shred` fseq | `pohh` | all `shred` tiles | fdctl | Shred version/control latch from Agave boot path to shred. |
 | `rnonce_ss` | `repair` | all `shred` tiles | Full Firedancer | Repair/shred shared nonce secret object. |
-| `bam_status` fseq | `bam` | `quic`, optional `bundle`; mapped read-only into `verify` | fdctl BAM | Bit 0 is `FD_BAM_STATUS_FSEQ_OVERRIDE_ACTIVE`; bit 1 is `FD_BAM_STATUS_FSEQ_CURRENT_SLOT_HAS_BAM_WORK`. QUIC and bundle suppress/drain TPU ingestion while override is active; current verify code does not query it. |
+| `bam_status` fseq | `bam` | `pack`, optional `bundle` | fdctl BAM | Bit 0 is `FD_BAM_STATUS_FSEQ_OVERRIDE_ACTIVE`. Pack and bundle consult it before ingesting non-BAM work while override is active. |
 | `bam_ctrl` | CLI commands and `bam` | CLI commands and `bam` | fdctl BAM | Shared admin control block for `set-bam`/`get-bam`. CLI CASes request state; BAM applies and writes success/error/current fields. |
 | `bam_fee_cfg` | `bam` | `pack` | fdctl BAM | Shared fee configuration from scheduler/BAM to pack. |
 | key switch objects | local tile/keyguard path | signing clients and sign tile | Any tile with identity/vote signing | Shared key material handoff; not an mcache/dcache stream. |
@@ -156,7 +156,7 @@ Normal mcache/dcache links are FIFO per producer link. Reliable consumers provid
 
 `pack_bam_res` and `bank_bam` are durable FIFO feedback channels. BAM copies each `fd_bam_bundle_result_t` into an internal ring of `FD_BAM_MAX_PENDING_RESULTS`; the ring survives scheduler stream reset until flushed.
 
-`bam_status` is a shared fseq latch, not a normal fragment stream. BAM writes override/current-work bits during housekeeping. QUIC and bundle consult it before ingesting TPU/block-engine traffic; fdctl topology also maps it read-only into verify, but current verify code does not query it.
+`bam_status` is a shared fseq latch, not a normal fragment stream. BAM writes the override-active bit during housekeeping. Pack and bundle consult it before ingesting non-BAM work while override is active.
 
 `bam_shred` carries `fd_bam_shred_update_t` with signal `FD_BAM_STEM_SIG_SHRED_UPDATE`. Shred validates the signal and size, then updates BAM shred destinations. When destinations exist, shred sends leader/retransmit shreds to BAM receivers as configured.
 

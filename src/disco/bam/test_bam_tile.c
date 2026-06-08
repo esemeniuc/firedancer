@@ -675,7 +675,7 @@ test_bam_current_slot_work_status_bits( fd_wksp_t * wksp ) {
     .current_slot_has_bam_work = 1U,
   };
   fd_bam_tile_housekeeping( state );
-  FD_TEST( fd_fseq_query( fseq ) == ( FD_BAM_STATUS_FSEQ_OVERRIDE_ACTIVE | FD_BAM_STATUS_FSEQ_CURRENT_SLOT_HAS_BAM_WORK ) );
+  FD_TEST( fd_fseq_query( fseq ) == FD_BAM_STATUS_FSEQ_OVERRIDE_ACTIVE );
   fd_bam_test_metrics_write( state );
   FD_TEST( FD_MGAUGE_GET( BAM, LEADER_STATE_SLOT ) == 43UL );
   FD_TEST( FD_MGAUGE_GET( BAM, LEADER_STATE_TICK ) == 7UL );
@@ -3161,8 +3161,9 @@ test_bam_scheduler_ping_publishes_message( fd_wksp_t * wksp ) {
     test_bam_deliver_scheduler_ping( state, 9U );
 
     FD_TEST( test_hist_total_cnt( state->metrics.scheduler_pong_send_nanos ) == 0UL );
-    FD_TEST( state->metrics.scheduler_pong_send_outcome_cnt[ FD_METRICS_ENUM_BAM_SCHEDULER_PONG_SEND_OUTCOME_V_NO_LIVE_STREAM_IDX ] == 1UL );
-    FD_TEST( state->metrics.scheduler_pong_send_outcome_cnt[ FD_METRICS_ENUM_BAM_SCHEDULER_PONG_SEND_OUTCOME_V_ENQUEUED_IDX ] == 0UL );
+    for( ulong i=0UL; i<FD_METRICS_ENUM_BAM_SCHEDULER_PONG_SEND_OUTCOME_CNT; i++ ) {
+      FD_TEST( state->metrics.scheduler_pong_send_outcome_cnt[ i ] == 0UL );
+    }
     FD_TEST( state->bam_last_builder_activity_ns == g_clock - (long)1e8 );
 
     test_bam_env_destroy( env );
@@ -4828,7 +4829,7 @@ test_bam_disable_clears_status_with_pending_gossip_handoff( fd_wksp_t * wksp ) {
 
   fd_bam_publish_active_state( state, state->stem, 1 );
   FD_TEST( state->bam_gossip_handoff_pending );
-  fd_fseq_update( fseqs->status, FD_BAM_STATUS_FSEQ_OVERRIDE_ACTIVE | FD_BAM_STATUS_FSEQ_CURRENT_SLOT_HAS_BAM_WORK );
+  fd_fseq_update( fseqs->status, FD_BAM_STATUS_FSEQ_OVERRIDE_ACTIVE );
 
   fd_bam_publish_active_state( state, state->stem, 0 );
   FD_TEST( fd_fseq_query( fseqs->status ) == 0UL );

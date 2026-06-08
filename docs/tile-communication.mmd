@@ -143,8 +143,7 @@ flowchart LR
     bank_busy["bank_busy fseq"]:::control
     pohh_shred["pohh_shred fseq"]:::control
     bam -- writes --> bam_status
-    fd_quic -- reads --> bam_status
-    fd_verify -- mapped read-only --> bam_status
+    fd_pack -- reads --> bam_status
     fd_bundle -- reads --> bam_status
     bam -- reads/writes --> bam_ctrl
     bam -- writes --> bam_fee_cfg

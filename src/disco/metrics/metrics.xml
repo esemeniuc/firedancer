@@ -429,30 +429,26 @@ metric introduced.
     <int value="1" name="FirstBeforeEnd" label="The first BAM ingress observed for the slot arrived before slot end" />
     <int value="2" name="FirstAfterEnd" label="The first BAM ingress observed for the slot arrived after slot end" />
     <int value="3" name="UnknownSlotEnd" label="BAM ingress was observed for the slot but slot_end_ns was unavailable when the slot aged out of the retention window" />
-    <int value="4" name="UnresolvedSlot" label="BAM ingress was observed before any leader-slot attribution was available and was finalized without assigning it to a slot" />
 </enum>
 
 <enum name="BamSlotIngressTxnTiming">
     <int value="0" name="BeforeEnd" label="BAM ingress transactions observed before slot end" />
     <int value="1" name="AfterEnd" label="BAM ingress transactions observed after slot end" />
     <int value="2" name="UnknownSlotEnd" label="BAM ingress transactions observed while slot_end_ns was unavailable" />
-    <int value="3" name="UnresolvedSlot" label="BAM ingress transactions observed before any leader-slot attribution was available" />
 </enum>
 
 <enum name="BamCurrentLeaderSlotFirstIngressState">
     <int value="0" name="NoIngress" label="No scheduler-receive callback has been observed yet for the current leader slot" />
     <int value="1" name="SlotEndUnknown" label="A first scheduler-receive callback was observed for the current leader slot but slot_end_ns is not known yet" />
     <int value="2" name="BeforeEnd" label="The first scheduler-receive callback observed for the current leader slot arrived before slot end" />
-    <int value="3" name="AtEnd" label="The first scheduler-receive callback observed for the current leader slot arrived exactly at slot end" />
-    <int value="4" name="AfterEnd" label="The first scheduler-receive callback observed for the current leader slot arrived after slot end" />
+    <int value="3" name="AfterEnd" label="The first scheduler-receive callback observed for the current leader slot arrived at or after slot end" />
 </enum>
 
 <enum name="BamSchedulerPongSendOutcome">
-    <int value="0" name="NoLiveStream" label="Scheduler Ping arrived while no live scheduler stream was available for a Pong send attempt" />
-    <int value="1" name="Enqueued" label="Pong message was accepted by fd_grpc_client_stream_send on a live scheduler stream" />
-    <int value="2" name="FrameTxBusy" label="Scheduler Ping arrived on a live stream but the local HTTP/2 TX frame buffer was not empty, so Pong was skipped" />
-    <int value="3" name="RequestBusy" label="Scheduler Ping arrived on a live stream but a gRPC request body was still sending, so Pong was skipped" />
-    <int value="4" name="SendFail" label="Pong send was attempted on a live scheduler stream after local readiness checks but fd_grpc_client_stream_send returned failure" />
+    <int value="0" name="Enqueued" label="Pong message was accepted by fd_grpc_client_stream_send on a live scheduler stream" />
+    <int value="1" name="FrameTxBusy" label="Scheduler Ping arrived on a live stream but the local HTTP/2 TX frame buffer was not empty, so Pong was skipped" />
+    <int value="2" name="RequestBusy" label="Scheduler Ping arrived on a live stream but a gRPC request body was still sending, so Pong was skipped" />
+    <int value="3" name="SendFail" label="Pong send was attempted on a live scheduler stream after local readiness checks but fd_grpc_client_stream_send returned failure" />
 </enum>
 
 <tile name="bam">
@@ -495,10 +491,10 @@ metric introduced.
     <counter name="LeaderPendingDropped" enum="BamLeaderPendingDropReason" summary="Cumulative number of pending leader-state updates cleared before send because the BAM client reset, the scheduler request failed, or the stream ended/timed out" />
     <counter name="LeaderStateSuppressed" enum="BamLeaderStateSuppressReason" summary="Cumulative number of pack-provided BAM leader-state updates suppressed or cleared because the state was not locally live" />
     <counter name="LeaderPendingReplaced" summary="Cumulative number of pending leader-state updates replaced by a newer leader-state update before send" />
-    <counter name="SlotIngressResult" enum="BamSlotIngressResult" summary="Cumulative number of BAM slot-ingress records finalized after they aged out of the local retention window, bucketed by the first scheduler-receive callback for that slot relative to slot end or as unresolved when no slot attribution was available" />
-    <counter name="SlotIngressTransactions" enum="BamSlotIngressTxnTiming" summary="Cumulative number of BAM ingress transactions counted in finalized ingress rollups using scheduler-receive callback timestamps, bucketed as before-end or after-end only when slot_end_ns was known at observation time, else unknown or unresolved when no slot attribution was available" />
+    <counter name="SlotIngressResult" enum="BamSlotIngressResult" summary="Cumulative number of BAM slot-ingress records finalized after they aged out of the local retention window, bucketed by the first scheduler-receive callback for that slot relative to slot end or as unknown when slot_end_ns was unavailable" />
+    <counter name="SlotIngressTransactions" enum="BamSlotIngressTxnTiming" summary="Cumulative number of BAM ingress transactions counted in finalized ingress rollups using scheduler-receive callback timestamps, bucketed as before-end or after-end only when slot_end_ns was known at observation time, else unknown" />
     <counter name="HealthyLeaderSlotResult" enum="BamHealthyLeaderSlotResult" summary="Cumulative number of local leader slots that reached slot_end_ns while BAM status was CONNECTED_HEALTHY, bucketed by whether fresh current-slot BAM work had arrived before slot end" />
-    <counter name="SchedulerPongSendOutcome" enum="BamSchedulerPongSendOutcome" summary="Cumulative number of BAM scheduler Ping-to-Pong send outcomes, including no-live-stream skips, local send-boundary contention, and live-stream fd_grpc_client_stream_send results" />
+    <counter name="SchedulerPongSendOutcome" enum="BamSchedulerPongSendOutcome" summary="Cumulative number of BAM scheduler Ping-to-Pong send outcomes, including local send-boundary contention and live-stream fd_grpc_client_stream_send results" />
     <gauge name="KeepaliveRttSample" summary="Latest HTTP/2 keepalive round-trip time sample captured at scrape time (nanoseconds)" />
     <gauge name="KeepaliveRttSmoothed" summary="Exponentially smoothed HTTP/2 keepalive round-trip time estimate (nanoseconds)" />
     <gauge name="KeepaliveRttDeviation" summary="Smoothed HTTP/2 keepalive RTT variation estimate (nanoseconds)" />
@@ -685,26 +681,6 @@ metric introduced.
   <int value="6" name="Landed" label="BAM work was observed as landed via execution feedback" />
 </enum>
 
-<enum name="PackBamCurrentLeaderSlotState">
-  <int value="0" name="Received" label="BAM work received for the current pack leader slot" />
-  <int value="1" name="Accepted" label="BAM work accepted into pack for the current pack leader slot" />
-  <int value="2" name="RejectedPrePending" label="BAM work rejected before pending tracking for the current pack leader slot" />
-  <int value="3" name="Pending" label="BAM work currently pending in pack for the current pack leader slot" />
-  <int value="4" name="EvictedPostPending" label="BAM work evicted after pending acceptance for the current pack leader slot" />
-  <int value="5" name="Scheduled" label="BAM work scheduled for the current pack leader slot" />
-  <int value="6" name="Landed" label="BAM work observed as landed for the current pack leader slot" />
-</enum>
-
-<enum name="PackBamUnresolvedState">
-  <int value="0" name="Received" label="BAM work received with unresolved slot attribution" />
-  <int value="1" name="Accepted" label="BAM work accepted into pack with unresolved slot attribution" />
-  <int value="2" name="RejectedPrePending" label="BAM work rejected before pending tracking with unresolved slot attribution" />
-  <int value="3" name="Pending" label="BAM work currently pending in pack with unresolved slot attribution" />
-  <int value="4" name="EvictedPostPending" label="BAM work evicted after pending acceptance with unresolved slot attribution" />
-  <int value="5" name="Scheduled" label="BAM work scheduled with unresolved slot attribution" />
-  <int value="6" name="Landed" label="BAM work observed as landed with unresolved slot attribution" />
-</enum>
-
 <enum name="PackBamWorkFirstOutcome">
   <int value="0" name="RejectedPrePending" label="BAM work was first rejected before entering pack's pending-work tracker" />
   <int value="1" name="TrackingRejected" label="BAM work was accepted into pack but rejected because the tracked-work table was full" />
@@ -716,8 +692,7 @@ metric introduced.
 <enum name="PackBamFirstEventResult">
   <int value="0" name="NoEvent" label="No BAM event of this kind was observed before the leader slot finished" />
   <int value="1" name="BeforeEnd" label="The first BAM event of this kind was observed before slot end" />
-  <int value="2" name="AtEnd" label="The first BAM event of this kind was observed exactly at slot end" />
-  <int value="3" name="AfterEnd" label="The first BAM event of this kind was observed after slot end" />
+  <int value="2" name="AfterEnd" label="The first BAM event of this kind was observed at or after slot end" />
 </enum>
 
 <tile name="pack">
@@ -765,30 +740,13 @@ metric introduced.
     <counter name="BamWorkRejectedPrePending" enum="PackBamWorkInvalidReason" summary="Cumulative number of BAM transactions or fully assembled BAM bundles rejected by slot/blockhash revalidation before they were accepted into pack's pending-work tracker, by work kind and reason" />
     <counter name="BamPendingWorkEvicted" enum="PackBamWorkInvalidReason" summary="Cumulative number of BAM pending-work items evicted after acceptance into pack because slot/blockhash revalidation later failed, by work kind and reason" />
     <counter name="BamWorkItems" enum="PackBamWorkStage" summary="Cumulative number of BAM work items observed at each pack lifecycle stage. Multi-transaction BAM bundles count as one item." />
-    <counter name="BamWorkTransactions" enum="PackBamWorkStage" summary="Cumulative number of BAM transactions observed at each pack lifecycle stage." />
     <counter name="BamTrackingRejected" summary="Cumulative number of BAM work items rejected because the local tracked-work table was at capacity" />
     <counter name="BamTrackingRejectedTransactions" summary="Cumulative number of BAM transactions rejected because the local tracked-work table was at capacity" />
     <gauge name="BamPendingWorkCount" summary="Current number of BAM work items tracked in pack's pending-work set after acceptance and before scheduling or cleanup" />
     <gauge name="LeaderSlot" summary="Current pack leader slot, or 0 if pack is not the leader" />
     <gauge name="LeaderSlotEndNanos" summary="Current pack leader slot end wallclock timestamp (nanoseconds), or 0 if pack is not the leader" />
-    <counter name="BamLeaderSlotFirstInsertResult" enum="PackBamFirstEventResult" summary="Cumulative number of pack leader slots finalized with no BAM insert, a first BAM insert before slot end, exactly at slot end, or after slot end" />
-    <counter name="BamLeaderSlotFirstScheduleResult" enum="PackBamFirstEventResult" summary="Cumulative number of pack leader slots finalized with no BAM schedule, a first BAM schedule before slot end, exactly at slot end, or after slot end" />
-    <histogram name="BamLeaderSlotFirstInsertBeforeEndDistanceNanos" min="0" max="10000000000">
-        <summary>Distance in nanoseconds from the first BAM insert to slot_end_ns for a finalized pack leader slot when that first insert was observed before slot end. Sampled once per slot only for before-end inserts.</summary>
-    </histogram>
-    <histogram name="BamLeaderSlotFirstInsertAfterEndDistanceNanos" min="0" max="10000000000">
-        <summary>Distance in nanoseconds from slot_end_ns to the first BAM insert for a finalized pack leader slot when that first insert was observed after slot end. Sampled once per slot only for after-end inserts.</summary>
-    </histogram>
-    <histogram name="BamLeaderSlotFirstScheduleBeforeEndDistanceNanos" min="0" max="10000000000">
-        <summary>Distance in nanoseconds from the first BAM schedule to slot_end_ns for a finalized pack leader slot when that first schedule was observed before slot end. Sampled once per slot only for before-end schedules.</summary>
-    </histogram>
-    <histogram name="BamLeaderSlotFirstScheduleAfterEndDistanceNanos" min="0" max="10000000000">
-        <summary>Distance in nanoseconds from slot_end_ns to the first BAM schedule for a finalized pack leader slot when that first schedule was observed after slot end. Sampled once per slot only for after-end schedules.</summary>
-    </histogram>
-    <gauge name="BamCurrentLeaderSlotWorkItems" enum="PackBamCurrentLeaderSlotState" summary="Per-current-pack-leader-slot BAM work-item counts from pack's recent-slot tracker. Exported as 0 when pack is not leader or no BAM work has been recorded for the current leader slot." />
-    <gauge name="BamCurrentLeaderSlotWorkTransactions" enum="PackBamCurrentLeaderSlotState" summary="Per-current-pack-leader-slot BAM transaction counts from pack's recent-slot tracker. Exported as 0 when pack is not leader or no BAM work has been recorded for the current leader slot." />
-    <gauge name="BamUnresolvedWorkItems" enum="PackBamUnresolvedState" summary="BAM work-item counts in pack's explicit unresolved-slot bucket. Pending is current unresolved pending work; the other states accumulate work that remained unresolved when it passed through each stage." />
-    <gauge name="BamUnresolvedWorkTransactions" enum="PackBamUnresolvedState" summary="BAM transaction counts in pack's explicit unresolved-slot bucket. Pending is current unresolved pending transactions; the other states accumulate transactions that remained unresolved when they passed through each stage." />
+    <counter name="BamLeaderSlotFirstInsertResult" enum="PackBamFirstEventResult" summary="Cumulative number of pack leader slots finalized with no BAM insert, a first BAM insert before slot end, or a first BAM insert at or after slot end" />
+    <counter name="BamLeaderSlotFirstScheduleResult" enum="PackBamFirstEventResult" summary="Cumulative number of pack leader slots finalized with no BAM schedule, a first BAM schedule before slot end, or a first BAM schedule at or after slot end" />
     <counter name="BamWorkFirstOutcome" enum="PackBamWorkFirstOutcome" summary="Cumulative number of BAM work items bucketed by their first terminal pack outcome" />
     <histogram name="BamWorkRxToFirstOutcomeNanos" min="0" max="10000000000">
         <summary>Distribution of BAM scheduler-receive to first terminal pack outcome for a BAM work item, sampled once when that work is first rejected, tracking-rejected, pending-evicted, scheduled, or bundle-assembly-abandoned (nanoseconds)</summary>

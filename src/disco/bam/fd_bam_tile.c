@@ -147,8 +147,7 @@ metrics_write( fd_bam_tile_t * ctx ) {
       long delta = entry->first_rx_ts_ns - slot_end_ns;
       current_slot_first_ingress_state_idx =
           delta<0L ? FD_METRICS_ENUM_BAM_CURRENT_LEADER_SLOT_FIRST_INGRESS_STATE_V_BEFORE_END_IDX
-        : delta>0L ? FD_METRICS_ENUM_BAM_CURRENT_LEADER_SLOT_FIRST_INGRESS_STATE_V_AFTER_END_IDX
-                   : FD_METRICS_ENUM_BAM_CURRENT_LEADER_SLOT_FIRST_INGRESS_STATE_V_AT_END_IDX;
+                   : FD_METRICS_ENUM_BAM_CURRENT_LEADER_SLOT_FIRST_INGRESS_STATE_V_AFTER_END_IDX;
     }
   }
   current_slot_first_ingress_state[ current_slot_first_ingress_state_idx ] = 1U;
@@ -640,14 +639,7 @@ fd_bam_publish_active_state( fd_bam_tile_t *    ctx,
     }
     ctx->bam_gossip_handoff_pending = 0U;
 
-    _Bool current_slot_has_bam_work =
-        fd_bam_current_slot_has_bam_work( ctx, fd_log_wallclock() );
-    ulong bam_status =
-        FD_BAM_STATUS_FSEQ_OVERRIDE_ACTIVE |
-        fd_ulong_if( current_slot_has_bam_work,
-                     FD_BAM_STATUS_FSEQ_CURRENT_SLOT_HAS_BAM_WORK,
-                     0UL );
-    fd_fseq_update( ctx->bam_status_fseq, bam_status );
+    fd_fseq_update( ctx->bam_status_fseq, FD_BAM_STATUS_FSEQ_OVERRIDE_ACTIVE );
   }
 }
 
@@ -978,10 +970,6 @@ after_credit( fd_bam_tile_t *  ctx,
 
   fd_plugin_msg_bam_update_t * update =
       fd_chunk_to_laddr( ctx->plugin_out.mem, ctx->plugin_out.chunk );
-  fd_bam_metrics_t const * metrics = &ctx->metrics;
-  ulong const * failure_cnt = metrics->failure_cnt;
-  ulong const * ingress_batch_rejected_cnt = metrics->ingress_batch_rejected_cnt;
-  ulong const * ingress_message_rejected_cnt = metrics->ingress_message_rejected_cnt;
   memset( update, 0, sizeof(fd_plugin_msg_bam_update_t) );
 
   fd_cstr_ncpy( update->name, "bam", sizeof( update->name ) );
@@ -1007,34 +995,6 @@ after_credit( fd_bam_tile_t *  ctx,
   update->keepalive_rtt_smoothed  = ctx->rtt->smoothed_rtt;
   update->keepalive_rtt_deviation = ctx->rtt->var_rtt;
   update->feedback_queue_depth = ctx->feedback_queue_depth;
-  update->outbound_heartbeat_enqueued =
-      metrics->outbound_enqueue_outcome_cnt[ FD_METRICS_ENUM_BAM_ENQUEUE_OUTCOME_V_HEARTBEAT_ENQUEUED_IDX ];
-  update->outbound_heartbeat_enqueue_fail =
-      metrics->outbound_enqueue_outcome_cnt[ FD_METRICS_ENUM_BAM_ENQUEUE_OUTCOME_V_HEARTBEAT_ENQUEUE_FAIL_IDX ];
-  update->builder_heartbeats_decoded = metrics->builder_heartbeats_decoded_cnt;
-  update->transaction_published  = metrics->transaction_published_cnt;
-  update->atomic_batch_published = metrics->atomic_batch_published_cnt;
-  update->ingress_packet_oversize = metrics->ingress_packet_oversize_cnt;
-  update->failure_auth_challenge_decode = failure_cnt[ FD_METRICS_ENUM_BAM_FAILURE_V_AUTH_CHALLENGE_DECODE_IDX ];
-  update->failure_config_decode = failure_cnt[ FD_METRICS_ENUM_BAM_FAILURE_V_CONFIG_DECODE_IDX ];
-  update->failure_scheduler_envelope_decode = failure_cnt[ FD_METRICS_ENUM_BAM_FAILURE_V_SCHEDULER_ENVELOPE_DECODE_IDX ];
-  update->failure_request_failed = failure_cnt[ FD_METRICS_ENUM_BAM_FAILURE_V_REQUEST_FAILED_IDX ];
-  update->failure_resolve = failure_cnt[ FD_METRICS_ENUM_BAM_FAILURE_V_RESOLVE_IDX ];
-  update->failure_connect = failure_cnt[ FD_METRICS_ENUM_BAM_FAILURE_V_CONNECT_IDX ];
-  update->failure_io = failure_cnt[ FD_METRICS_ENUM_BAM_FAILURE_V_IO_IDX ];
-  update->failure_unsupported_version = failure_cnt[ FD_METRICS_ENUM_BAM_FAILURE_V_UNSUPPORTED_VERSION_IDX ];
-  update->failure_request_timeout = failure_cnt[ FD_METRICS_ENUM_BAM_FAILURE_V_REQUEST_TIMEOUT_IDX ];
-  update->failure_keepalive_timeout = failure_cnt[ FD_METRICS_ENUM_BAM_FAILURE_V_KEEPALIVE_TIMEOUT_IDX ];
-  update->failure_builder_activity_timeout = failure_cnt[ FD_METRICS_ENUM_BAM_FAILURE_V_BUILDER_ACTIVITY_TIMEOUT_IDX ];
-  update->ingress_multi_message_received = metrics->ingress_multi_message_received_cnt;
-  update->ingress_batch_commit_attempt = metrics->ingress_batch_commit_attempt_cnt;
-  update->ingress_batch_published = metrics->ingress_batch_published_cnt;
-  update->ingress_batch_rejected_invalid_batch = ingress_batch_rejected_cnt[ FD_METRICS_ENUM_BAM_INGRESS_BATCH_REJECT_REASON_V_INVALID_BATCH_IDX ];
-  update->ingress_batch_rejected_empty_batch = ingress_batch_rejected_cnt[ FD_METRICS_ENUM_BAM_INGRESS_BATCH_REJECT_REASON_V_EMPTY_BATCH_IDX ];
-  update->ingress_batch_rejected_vote_transaction = ingress_batch_rejected_cnt[ FD_METRICS_ENUM_BAM_INGRESS_BATCH_REJECT_REASON_V_VOTE_TRANSACTION_IDX ];
-  update->ingress_batch_rejected_non_revert_multi_packet = ingress_batch_rejected_cnt[ FD_METRICS_ENUM_BAM_INGRESS_BATCH_REJECT_REASON_V_NON_REVERT_MULTI_PACKET_IDX ];
-  update->ingress_message_rejected_empty_message = ingress_message_rejected_cnt[ FD_METRICS_ENUM_BAM_INGRESS_MESSAGE_REJECT_REASON_V_EMPTY_MESSAGE_IDX ];
-  update->ingress_message_rejected_overflow_message = ingress_message_rejected_cnt[ FD_METRICS_ENUM_BAM_INGRESS_MESSAGE_REJECT_REASON_V_OVERFLOW_MESSAGE_IDX ];
 
   ulong tspub = fd_frag_meta_ts_comp( fd_bam_now() );
   fd_stem_publish(
