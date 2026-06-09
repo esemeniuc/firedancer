@@ -43,7 +43,7 @@ Environment defaults and detection:
   DUMMY_KEY_OWNER=      # optional owner for newly generated dummy key
   CLUSTER_RPC_URL=https://api.mainnet.solana.com
   SKIP_CLUSTER_CHECK=0  # set to 1 to skip checking target identity + interface is already in use
-  DELINQUENT_SLOT_DISTANCE=4 # allow staked promote when slot lag is greater than this value
+  DELINQUENT_SLOT_DISTANCE=8 # allow staked promote when slot lag is greater than this value
   CLUSTER_POLL_INTERVAL_SECS=1 # seconds between cluster polls while waiting to promote staked identity
 USAGE
 }
@@ -139,7 +139,7 @@ SET_IDENTITY_FORCE="${SET_IDENTITY_FORCE:-0}"
 ALLOW_NON_SYMLINK="${ALLOW_NON_SYMLINK:-0}"
 CLUSTER_RPC_URL="${CLUSTER_RPC_URL:-https://api.mainnet.solana.com}"
 SKIP_CLUSTER_CHECK="${SKIP_CLUSTER_CHECK:-0}"
-DELINQUENT_SLOT_DISTANCE="${DELINQUENT_SLOT_DISTANCE:-4}"
+DELINQUENT_SLOT_DISTANCE="${DELINQUENT_SLOT_DISTANCE:-8}"
 CLUSTER_POLL_INTERVAL_SECS="${CLUSTER_POLL_INTERVAL_SECS:-1}"
 
 if [[ "$MODE" == "firedancer" ]]; then
