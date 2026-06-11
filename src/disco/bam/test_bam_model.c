@@ -42,31 +42,6 @@ bam_model_encode_scheduler_batches( bam_types_AtomicTxnBatch * batches,
 }
 
 static size_t
-bam_model_encode_scheduler_heartbeat( ulong time_sent_microseconds,
-                                    uchar * out,
-                                    size_t  out_sz ) {
-  bam_api_SchedulerResponse resp = bam_api_SchedulerResponse_init_default;
-  resp.which_versioned_msg = bam_api_SchedulerResponse_v0_tag;
-  resp.versioned_msg.v0.which_resp = bam_api_SchedulerResponseV0_heart_beat_tag;
-  resp.versioned_msg.v0.resp.heart_beat.time_sent_microseconds = time_sent_microseconds;
-
-  pb_ostream_t ostream = pb_ostream_from_buffer( out, out_sz );
-  FD_TEST( pb_encode( &ostream, bam_api_SchedulerResponse_fields, &resp ) );
-  return ostream.bytes_written;
-}
-
-static size_t
-bam_model_encode_auth_challenge( char const * challenge,
-                               uchar *      out,
-                               size_t       out_sz ) {
-  bam_api_AuthChallengeResponse resp = bam_api_AuthChallengeResponse_init_default;
-  fd_cstr_ncpy( resp.challenge_to_sign, challenge, sizeof( resp.challenge_to_sign ) );
-  pb_ostream_t ostream = pb_ostream_from_buffer( out, out_sz );
-  FD_TEST( pb_encode( &ostream, bam_api_AuthChallengeResponse_fields, &resp ) );
-  return ostream.bytes_written;
-}
-
-static size_t
 bam_model_encode_config( uint commission_bps,
                        uchar const * prio_fee_recipient,
                        uchar * out,
@@ -109,22 +84,7 @@ typedef struct {
   uchar idx;
 } bam_model_wire_result_t;
 
-FD_FN_UNUSED static _Bool
-bam_model_decode_last_scheduler_message( fd_bam_tile_t *          state,
-                                       bam_api_SchedulerMessage * out ) {
-  fd_grpc_client_t * client = state->grpc_client;
-  fd_grpc_hdr_t hdr;
-  fd_memcpy( &hdr, client->nanopb_tx, sizeof(fd_grpc_hdr_t) );
-  uint msg_sz = fd_uint_bswap( hdr.msg_sz );
-  if( FD_UNLIKELY( !msg_sz ) ) return 0;
-  if( FD_UNLIKELY( msg_sz > state->grpc_buf_max ) ) return 0;
-
-  *out = (bam_api_SchedulerMessage)bam_api_SchedulerMessage_init_default;
-  pb_istream_t stream = pb_istream_from_buffer( client->nanopb_tx + sizeof(fd_grpc_hdr_t), msg_sz );
-  return pb_decode( &stream, bam_api_SchedulerMessage_fields, out );
-}
-
-FD_FN_UNUSED static _Bool
+static _Bool
 bam_model_decode_last_wire_result( fd_bam_tile_t *         state,
                                  bam_model_wire_result_t * out ) {
   test_bam_decoded_message_t decoded;
@@ -325,6 +285,22 @@ bam_model_current_slot( bam_model_harness_t const * h ) {
 }
 
 static void
+bam_model_sync_leader_state( bam_model_harness_t * h ) {
+  ulong slot = bam_model_current_slot( h );
+  uint remaining_cu = h->slot_cu_limit > h->slot_cu_used
+                    ? h->slot_cu_limit - h->slot_cu_used
+                    : 0U;
+
+  h->state->bam_leader_state = (fd_bam_leader_state_t) {
+    .slot                      = slot,
+    .slot_end_ns               = fd_long_sat_add( g_clock, 400000000L + (long)( slot & 0xffffUL ) ),
+    .slot_cu_budget_remaining  = remaining_cu,
+    .tick                      = (ushort)( slot & 0xffffUL ),
+    .current_slot_has_bam_work = (uchar)( h->ready_cnt || h->partial->active ),
+  };
+}
+
+static void
 bam_model_record_intent( bam_model_harness_t * h,
                        uint                 seq_id ) {
   for( ulong i=0UL; i<h->intent_cnt; i++ ) {
@@ -339,33 +315,79 @@ bam_model_record_intent( bam_model_harness_t * h,
   h->intent_cnt++;
 }
 
-static void
+static int
 bam_model_try_enqueue_result( bam_model_harness_t *            h,
                             fd_bam_bundle_result_t const * res ) {
   fd_bam_tile_t * state = h->state;
   if( FD_UNLIKELY( state->feedback_queue_depth >= FD_BAM_MAX_PENDING_RESULTS ) ) {
     state->metrics.feedback_results_dropped_cnt++;
     h->drop_cnt++;
-    return;
+    return 0;
   }
 
   state->bam_results[ state->bam_results_tail ] = *res;
   state->bam_results_tail = (ushort)(( state->bam_results_tail + 1U ) % FD_BAM_MAX_PENDING_RESULTS );
   state->feedback_queue_depth = (ushort)( state->feedback_queue_depth + 1U );
+  return 1;
+}
+
+static void
+bam_model_append_expected_wire_result( bam_model_harness_t *            h,
+                                       fd_bam_bundle_result_t const * res ) {
+  FD_TEST( h->model_result_cnt < BAM_MODEL_MAX_RESULTS );
+  h->model_results[ h->model_result_cnt++ ] = *res;
 }
 
 static void
 bam_model_emit_model_result( bam_model_harness_t *               h,
                          fd_bam_bundle_result_t const *    res ) {
   bam_model_record_intent( h, res->seq_id );
-  if( FD_LIKELY( h->model_result_cnt < BAM_MODEL_MAX_RESULTS ) ) h->model_results[ h->model_result_cnt++ ] = *res;
-  bam_model_try_enqueue_result( h, res );
+  if( FD_LIKELY( bam_model_try_enqueue_result( h, res ) ) ) {
+    bam_model_append_expected_wire_result( h, res );
+  }
+}
+
+static void
+bam_model_record_production_results( bam_model_harness_t * h,
+                                     ushort                tail_before,
+                                     ushort                depth_before,
+                                     ulong                 drop_before ) {
+  fd_bam_tile_t * state = h->state;
+  FD_TEST( state->feedback_queue_depth >= depth_before );
+
+  ulong accepted_cnt = (ulong)( state->feedback_queue_depth - depth_before );
+  ushort idx = tail_before;
+  for( ulong i=0UL; i<accepted_cnt; i++ ) {
+    fd_bam_bundle_result_t const * res = &state->bam_results[ idx ];
+    bam_model_record_intent( h, res->seq_id );
+    bam_model_append_expected_wire_result( h, res );
+    idx = (ushort)(( (uint)idx + 1U ) % FD_BAM_MAX_PENDING_RESULTS);
+  }
+
+  ulong drop_after = state->metrics.feedback_results_dropped_cnt;
+  FD_TEST( drop_after >= drop_before );
+  h->drop_cnt += drop_after - drop_before;
 }
 
 static bam_model_txn_spec_t
 bam_model_parse_payload( uchar const * payload,
                        ulong         payload_sz ) {
   bam_model_txn_spec_t spec = {0};
+  uchar txn_buf[ FD_TXN_MAX_SZ ];
+  if( FD_LIKELY( fd_txn_parse( payload, payload_sz, txn_buf, NULL ) ) ) {
+    uint hash = 2166136261U;
+    for( ulong i=0UL; i<payload_sz; i++ ) {
+      hash ^= (uint)payload[ i ];
+      hash *= 16777619U;
+    }
+    spec.mode         = BAM_MODEL_TXN_OK;
+    spec.fee_lamports = (uchar)( 1U + ( hash        & 63U ) );
+    spec.requested_cu = (uchar)( 10U + (( hash>> 8 ) & 31U ) );
+    spec.actual_cu    = (uchar)(  1U + (( hash>>16 ) % (uint)spec.requested_cu ) );
+    spec.work_id      = (uchar)( hash>>24 );
+    return spec;
+  }
+
   if( FD_UNLIKELY( payload_sz<5UL ) ) {
     spec.mode         = BAM_MODEL_TXN_SANITIZE_FAIL;
     spec.fee_lamports = 0U;
@@ -408,8 +430,29 @@ bam_model_keepalive_sync( fd_bam_tile_t * state,
 static void
 bam_model_node_deliver_heartbeat( bam_model_harness_t * h ) {
   uchar pb[64];
-  size_t pb_sz = bam_model_encode_scheduler_heartbeat( (ulong)fd_long_max( g_clock/1000L, 0L ), pb, sizeof(pb) );
+  bam_api_SchedulerResponse resp = bam_api_SchedulerResponse_init_default;
+  resp.which_versioned_msg = bam_api_SchedulerResponse_v0_tag;
+  resp.versioned_msg.v0.which_resp = bam_api_SchedulerResponseV0_heart_beat_tag;
+  resp.versioned_msg.v0.resp.heart_beat.time_sent_microseconds = (ulong)fd_long_max( g_clock/1000L, 0L );
+
+  pb_ostream_t ostream = pb_ostream_from_buffer( pb, sizeof(pb) );
+  FD_TEST( pb_encode( &ostream, bam_api_SchedulerResponse_fields, &resp ) );
+  size_t pb_sz = ostream.bytes_written;
   fd_bam_client_grpc_rx_msg( h->state, pb, pb_sz, FD_BAM_CLIENT_REQ_BAM_InitSchedulerStream );
+}
+
+static void
+bam_model_node_deliver_scheduler_response( bam_model_harness_t * h,
+                                           uchar const *         pb,
+                                           size_t                pb_sz ) {
+  bam_model_sync_leader_state( h );
+
+  ushort depth_before = h->state->feedback_queue_depth;
+  ushort tail_before  = h->state->bam_results_tail;
+  ulong  drop_before  = h->state->metrics.feedback_results_dropped_cnt;
+
+  fd_bam_client_grpc_rx_msg( h->state, pb, pb_sz, FD_BAM_CLIENT_REQ_BAM_InitSchedulerStream );
+  bam_model_record_production_results( h, tail_before, depth_before, drop_before );
 }
 
 static void
@@ -444,7 +487,11 @@ bam_model_node_send_auth_challenge( bam_model_harness_t * h,
                      0UL );
 
   uchar pb[256];
-  size_t pb_sz = bam_model_encode_auth_challenge( challenge, pb, sizeof(pb) );
+  bam_api_AuthChallengeResponse resp = bam_api_AuthChallengeResponse_init_default;
+  fd_cstr_ncpy( resp.challenge_to_sign, challenge, sizeof( resp.challenge_to_sign ) );
+  pb_ostream_t ostream = pb_ostream_from_buffer( pb, sizeof(pb) );
+  FD_TEST( pb_encode( &ostream, bam_api_AuthChallengeResponse_fields, &resp ) );
+  size_t pb_sz = ostream.bytes_written;
   h->state->bam_auth_inflight = 1U;
   fd_bam_client_grpc_rx_msg( h->state, pb, pb_sz, FD_BAM_CLIENT_REQ_BAM_GetAuthChallenge );
 }
@@ -493,7 +540,7 @@ bam_model_node_deliver_batches( bam_model_harness_t *      h,
 
   uchar pb[4096];
   size_t pb_sz = bam_model_encode_scheduler_batches( batches, def_cnt, pb, sizeof(pb) );
-  fd_bam_client_grpc_rx_msg( h->state, pb, pb_sz, FD_BAM_CLIENT_REQ_BAM_InitSchedulerStream );
+  bam_model_node_deliver_scheduler_response( h, pb, pb_sz );
 }
 
 static void
@@ -619,12 +666,9 @@ bam_model_execute_batch( bam_model_harness_t * h,
   res.bundle_err        = FD_BAM_BUNDLE_ERR_NONE;
 
   uint requested_total = 0U;
-  uint actual_total    = 0U;
-
   for( uchar i=0U; i<b->txn_cnt; i++ ) {
     bam_model_txn_spec_t const * spec = &b->txn[i].spec;
     requested_total += spec->requested_cu;
-    actual_total    += spec->actual_cu;
   }
 
   if( FD_UNLIKELY( h->slot_microblock_used + b->txn_cnt > h->slot_microblock_limit ) ) {
@@ -976,19 +1020,6 @@ bam_model_absorb_verify_output( bam_model_harness_t * h ) {
   }
 }
 
-FD_FN_UNUSED static void
-bam_model_flush_wire_results( bam_model_harness_t * h ) {
-  while( h->state->feedback_queue_depth ) {
-    ushort pending = h->state->feedback_queue_depth;
-    h->state->feedback_queue_depth = 1U;
-    FD_TEST( fd_bam_test_flush_results( h->state )==1 );
-    if( FD_UNLIKELY( h->wire_result_cnt >= BAM_MODEL_MAX_RESULTS ) ) continue;
-    bam_model_wire_result_t * wr = &h->wire_results[ h->wire_result_cnt ];
-    if( FD_UNLIKELY( bam_model_decode_last_wire_result( h->state, wr ) ) ) h->wire_result_cnt++;
-    h->state->feedback_queue_depth = (ushort)( pending-1U );
-  }
-}
-
 static void
 bam_model_apply_pipeline( bam_model_harness_t * h ) {
   bam_model_absorb_verify_output( h );
@@ -1104,13 +1135,6 @@ bam_model_assert_trace_metadata( bam_model_harness_t const * h ) {
 }
 
 static void
-bam_model_assert_intents( bam_model_harness_t const * h ) {
-  for( ulong i=0UL; i<h->intent_cnt; i++ ) {
-    FD_TEST( h->intents[i].intent_cnt==1U );
-  }
-}
-
-static void
 bam_model_expected_wire_result( fd_bam_bundle_result_t const * res,
                                 bam_model_wire_result_t *      out ) {
   fd_memset( out, 0, sizeof(*out) );
@@ -1171,7 +1195,17 @@ bam_model_expected_wire_result( fd_bam_bundle_result_t const * res,
 
 static void
 bam_model_assert_wire_matches_model( bam_model_harness_t * h ) {
-  bam_model_flush_wire_results( h );
+  while( h->state->feedback_queue_depth ) {
+    ushort pending = h->state->feedback_queue_depth;
+    h->state->feedback_queue_depth = 1U;
+    FD_TEST( fd_bam_test_flush_results( h->state )==1 );
+    FD_TEST( h->wire_result_cnt < BAM_MODEL_MAX_RESULTS );
+    bam_model_wire_result_t * wr = &h->wire_results[ h->wire_result_cnt ];
+    FD_TEST( bam_model_decode_last_wire_result( h->state, wr ) );
+    h->wire_result_cnt++;
+    h->state->feedback_queue_depth = (ushort)( pending-1U );
+  }
+
   if( FD_UNLIKELY( h->wire_result_cnt != h->model_result_cnt ) ) {
     FD_LOG_WARNING(( "wire/model result count mismatch: wire=%lu model=%lu",
                      h->wire_result_cnt, h->model_result_cnt ));
@@ -1213,6 +1247,8 @@ bam_model_assert_wire_matches_model( bam_model_harness_t * h ) {
     }
   }
 }
+
+#ifndef FD_BAM_MODEL_NO_MAIN
 
 /* ---------- Deterministic scenario matrix ---------- */
 
@@ -1447,7 +1483,14 @@ bam_model_run_scenario_auth_and_control( bam_model_harness_t * h ) {
   FD_TEST( h->state->bam_stream_connecting==1U );
 
   bam_api_SchedulerMessage out_msg = bam_api_SchedulerMessage_init_default;
-  FD_TEST( bam_model_decode_last_scheduler_message( h->state, &out_msg ) );
+  fd_grpc_client_t * client = h->state->grpc_client;
+  fd_grpc_hdr_t hdr;
+  fd_memcpy( &hdr, client->nanopb_tx, sizeof(fd_grpc_hdr_t) );
+  uint msg_sz = fd_uint_bswap( hdr.msg_sz );
+  FD_TEST( msg_sz );
+  FD_TEST( msg_sz <= h->state->grpc_buf_max );
+  pb_istream_t stream = pb_istream_from_buffer( client->nanopb_tx + sizeof(fd_grpc_hdr_t), msg_sz );
+  FD_TEST( pb_decode( &stream, bam_api_SchedulerMessage_fields, &out_msg ) );
   FD_TEST( out_msg.which_versioned_msg==bam_api_SchedulerMessage_v0_tag );
   FD_TEST( out_msg.versioned_msg.v0.which_msg==bam_api_SchedulerMessageV0_auth_proof_tag );
   FD_TEST( 0==strcmp( out_msg.versioned_msg.v0.msg.auth_proof.challenge_to_sign, challenge ) );
@@ -1721,7 +1764,9 @@ bam_model_run_scenarios( fd_wksp_t * wksp ) {
   bam_model_init( h, wksp );
   bam_model_run_scenario_atomic_success( h );
   bam_model_assert_trace_metadata( h );
-  bam_model_assert_intents( h );
+  for( ulong i=0UL; i<h->intent_cnt; i++ ) {
+    FD_TEST( h->intents[i].intent_cnt==1U );
+  }
   bam_model_assert_wire_matches_model( h );
   bam_model_fini( h );
 
@@ -1790,7 +1835,7 @@ main( int argc,
   fd_metrics_register( (ulong *)fd_metrics_new( metrics_scratch, 0UL ) );
 
   ulong cpu_idx = fd_tile_cpu_id( fd_tile_idx() );
-  if( cpu_idx > fd_shmem_cpu_cnt() ) cpu_idx = 0UL;
+  if( cpu_idx >= fd_shmem_cpu_cnt() ) cpu_idx = 0UL;
 
   char const * _page_sz = fd_env_strip_cmdline_cstr ( &argc, &argv, "--page-sz", NULL, "normal"                     );
   ulong        page_cnt = fd_env_strip_cmdline_ulong( &argc, &argv, "--page-cnt", NULL, 256UL                        );
@@ -1814,3 +1859,5 @@ main( int argc,
   fd_halt();
   return 0;
 }
+
+#endif /* FD_BAM_MODEL_NO_MAIN */

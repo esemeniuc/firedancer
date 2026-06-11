@@ -1,93 +1,66 @@
-# BAM Integration, Model, and Stateful Fuzz
+# BAM Stateful Fuzz Harness
 
-## Scope
+This doc is for the BAM model/fuzzer surface in `src/disco/bam/`.
 
-The BAM test surface is split between a small real integration suite and a deterministic downstream model (`verify -> dedup -> resolv -> pack -> bank -> bam`).
+## Files
 
-The contract source is:
+- `test_bam_tile.c`: production BAM tile/client integration tests for protobuf ingress, result FIFO flushing, leader/control paths, and malformed-ingress rejection.
+- `test_bam_model.c`: deterministic model for the scheduler stream through the synthetic `verify -> dedup -> resolv -> pack -> bank -> bam` path.
+- `fuzz_bam_e2e_stateful.c`: stateful fuzz target that reuses the model and also drives production scheduler-ingress decode for raw BAM batches.
 
-- `bam-cleanroom-spec.md` (normative behavior)
-- `BAM_docs.md` (tile wiring context)
+Contract references: `BAM_docs.md`, `BAM_Validator_Spec.md`, and `src/disco/bam/`.
 
-## What is covered
+## Grammar
 
-Real queue/wire integration (`src/disco/bam/test_bam_e2e.c`):
+The byte grammar is stable: each event is `kind, a, b, c`, with `kind % 11` selecting:
 
-1. Flush committed bundle results through the real BAM result queue and decode the outbound wire message.
-2. Inject inbound scheduler protobufs that stage real not-committed results, flush them, and decode the outbound wire message.
-3. Exercise real vote-payload rejection on the BAM ingress path and verify the encoded outbound reason.
+| Event | Main coverage |
+| --- | --- |
+| `SEND_BATCH` | Synthetic valid batches; with `c & 0x80`, production scheduler-ingress decode. |
+| `REPLAY` | Same `seq_id` replay. |
+| `DUP_SEQ` | Same `seq_id` with changed payload; with `c & 0x80`, partial atomic batch then sequence switch. |
+| `NEW_SEQ_SAME_PAYLOAD` | Payload replay under a new `seq_id`. |
+| `ADVANCE_SLOT` | Slot rollover, stale-slot behavior, budget reset. |
+| `LEADER_OFF`, `LEADER_ON` | Non-leader, missing bank, and resumed-leader paths. |
+| `DISCONNECT`, `RECONNECT` | Durable result FIFO across scheduler stream resets. |
+| `FILL_QUEUE`, `DRAIN_QUEUE` | Result queue fill, explicit drops, and wire/model flushing. |
 
-Deterministic model matrix (`src/disco/bam/test_bam_model.c`):
+High-signal extensions:
 
-1. Atomic all-success bundle.
-2. Atomic failure at verify/sig stage.
-3. Atomic failure at resolv/LUT stage.
-4. Atomic runtime instruction failure in bank.
-5. Partial/missing batch indices then seq switch.
-6. Non-atomic single-txn success/failure.
-7. Replay same batch same `seq_id`.
-8. Replay same batch new `seq_id` after missing result/drop pressure.
-9. Disconnect/reconnect while results are in-flight.
-10. CU-limit and micro-block-limit edge/overflow.
-11. Fee-accounting with mixed outcomes.
-12. Forced channel saturation and explicit result drops.
-13. Prevalidation: `packets.len()>5` rejection.
-14. Prevalidation: inconsistent `revert_on_error` rejection.
-15. Prevalidation: stale `max_schedule_slot` rejection.
-16. Slot-source fallback (`leader working slot` absent -> `bankforks working slot`).
-17. Non-leader phase: buffered + new work maps to `OUTSIDE_SLOT`.
-18. Bank-unavailable worker path maps to `POH_TIMEOUT`.
+- `SEND_BATCH` uses the original synthetic valid-batch path unless `c & 0x80`.
+- High-bit `SEND_BATCH` drives production scheduler-ingress decode.
+- With `b & 0x40` clear, high-bit `SEND_BATCH` covers: empty batch, too many packets, non-atomic multi-packet batch, mixed `revert_on_error`, oversize metadata, and simple vote transaction.
+- With `b & 0x40` set, high-bit `SEND_BATCH` sends valid Solana transaction fixtures as either one transaction or an atomic bundle, then the harness models downstream execution.
+- `FILL_QUEUE` uses bounded direct-result fill unless `a & 0x80`; high-bit `FILL_QUEUE` saturates the result FIFO and asserts one intentional drop.
+- Final wire/model comparison includes only results accepted into the durable BAM result FIFO. Intentionally dropped result attempts are tracked by drop counters.
 
-Stateful fuzz (`src/disco/bam/fuzz_bam_e2e_stateful.c`):
+The checked-in corpus should stay compact: one broad mixed trace plus targeted production-ingress rejection, valid-ingress, and forced-drop seeds.
 
-- Event grammar:
-  - `SEND_BATCH`
-  - `REPLAY`
-  - `DUP_SEQ`
-  - `NEW_SEQ_SAME_PAYLOAD`
-  - `ADVANCE_SLOT`
-  - `LEADER_ON`
-  - `LEADER_OFF`
-  - `DISCONNECT`
-  - `RECONNECT`
-  - `FILL_QUEUE`
-  - `DRAIN_QUEUE`
-- Model-check mode: compares the synthetic model state vs oracle fee/CU/result/drop state after every event.
-- Deterministic seed from input bytes.
-- Failure path writes repro artifact to `/tmp/bam_stateful_repro_<seed>.txt` including shrunk event prefix and first invariant failure snapshot.
+## Commands
 
-## Contract assumptions and best-effort semantics
-
-- BAM result delivery is best-effort under bounded queues (`try_send` semantics). Missing results are allowed and asserted via drop counters instead of exactly-once expectations.
-- Replay with same or new `seq_id` must not double-charge fees or double-commit underlying work.
-- Atomic batches enforce rollback semantics (`COMMIT_CANCELLED` for non-primary peers).
-- Slot-source rule uses leader working slot when present, otherwise bankforks working slot.
-- Auth flow assertions include `AUTH_LABEL`-prefixed signing payload and on-wire `AuthProof` field validation.
-- In this standalone unit harness, drop-pressure assertions are validated at the BAM result queue boundary (pending/head/tail/drop counters) rather than through `fd_bam_send_result` metric side effects.
-
-## Run commands
-
-From repo root:
+Default GCC build and smoke:
 
 ```bash
-make -j4 build/native/gcc/unit-test/test_bam_e2e
-build/native/gcc/unit-test/test_bam_e2e
-make -j4 build/native/gcc/unit-test/test_bam_model
-build/native/gcc/unit-test/test_bam_model
-make -j4 build/native/gcc/fuzz-test/fuzz_bam_e2e_stateful
+make -j4 test_bam_model fuzz_bam_e2e_stateful
+build/native/gcc-12/unit-test/test_bam_model
+build/native/gcc-12/fuzz-test/fuzz_bam_e2e_stateful corpus/fuzz_bam_e2e_stateful/*
+make fuzz_bam_e2e_stateful_unit
 ```
 
-Stateful fuzz smoke (stub engine build):
+LibFuzzer:
 
 ```bash
-printf '\x01\x02\x03\x04' >/tmp/bam_fuzz_seed.bin
-build/native/gcc/fuzz-test/fuzz_bam_e2e_stateful /tmp/bam_fuzz_seed.bin
+make CC=clang CXX=clang++ EXTRAS=fuzz -j4 fuzz_bam_e2e_stateful
+build/native/clang/fuzz-test/fuzz_bam_e2e_stateful -max_total_time=60 corpus/fuzz_bam_e2e_stateful/explore corpus/fuzz_bam_e2e_stateful
 ```
 
-LibFuzzer mode (if built with `EXTRAS=fuzz`) can use a time budget:
+Use `BUILDDIR=native/clang-fuzz` only when you want a separate clang fuzz output tree.
+
+AFL++:
 
 ```bash
-build/native/clang/fuzz-test/fuzz_bam_e2e_stateful -max_total_time=60 <corpus_dir>
+make CC=clang CXX=clang++ EXTRAS=afl++ AFL_LIB=/usr/lib/afl -j4 fuzz_bam_e2e_stateful
+AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 AFL_SKIP_CPUFREQ=1 afl-fuzz -i corpus/fuzz_bam_e2e_stateful -o findings -- build/native/clang/fuzz-test/fuzz_bam_e2e_stateful
 ```
 
-On invariant failure, rerun with the generated repro artifact (`/tmp/bam_stateful_repro_<seed>.txt`).
+On failure, reproduce with the libFuzzer artifact or the failing corpus path printed by the runner.
