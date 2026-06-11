@@ -1,6 +1,5 @@
 #include "fd_resolv_tile.h"
 #include "../../disco/fd_txn_m.h"
-#include "../../disco/bam/fd_bam_types.h"
 #include "../../disco/bam/fd_bam_publish.h"
 #include "../../disco/topo/fd_topo.h"
 #include "../replay/fd_replay_tile.h"
@@ -752,3 +751,20 @@ fd_topo_run_tile_t fd_tile_resolv = {
   .unprivileged_init        = unprivileged_init,
   .run                      = stem_run,
 };
+
+#ifdef FD_RESOLV_TILE_BAM_UNIT_TEST
+
+char const *
+fd_vinyl_strerror( int err ) {
+  (void)err;
+  return "test vinyl stub";
+}
+
+#define TEST_BAM_RESOLVE_CTX_T       fd_resolv_ctx_t
+#define TEST_BAM_RESOLVE_OUT_CNT     3UL
+#define TEST_BAM_RESOLVE_BAM_OUT_IDX 2UL
+#define TEST_BAM_RESOLVE_HAS_REPLAY  1
+#define TEST_BAM_RESOLVE_IN_KIND     IN_KIND_DEDUP
+#include "../../disco/bam/test_bam_resolve_common.c"
+
+#endif /* FD_RESOLV_TILE_BAM_UNIT_TEST */

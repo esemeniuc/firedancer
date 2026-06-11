@@ -45,7 +45,7 @@ typedef struct {
   ulong            depths[ TEST_BAM_RESOLVE_OUT_CNT ];
   ulong            cr_avail[ TEST_BAM_RESOLVE_OUT_CNT ];
   ulong            min_cr_avail;
-  _Bool            out_reliable[ TEST_BAM_RESOLVE_OUT_CNT ];
+  int              out_reliable[ TEST_BAM_RESOLVE_OUT_CNT ];
   fd_stem_context_t stem[1];
 
   void * map_mem;

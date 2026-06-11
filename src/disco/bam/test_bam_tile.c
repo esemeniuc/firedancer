@@ -4055,10 +4055,10 @@ setup_ctrl_defaults( fd_bam_tile_t * ctx,
   ctx->server_fqdn_len = (ushort)host_len;
   strcpy( ctx->server_sni, host );
   ctx->server_sni_len = (ushort)host_len;
-  ctx->server_tcp_port = 80;
+  ctx->server_tcp_port = 50055;
   ctx->is_ssl          = 0;
   ctrl->enable         = 1U;
-  fd_cstr_ncpy( ctrl->url, "http://testnet.bam.jito.wtf:80", sizeof( ctrl->url ) );
+  fd_cstr_ncpy( ctrl->url, "http://testnet.bam.jito.wtf:50055", sizeof( ctrl->url ) );
   fd_cstr_ncpy( ctrl->sni, host, sizeof( ctrl->sni ) );
   ctrl->state = FD_BAM_CTRL_STATE_IDLE;
 }
@@ -4176,7 +4176,7 @@ test_bam_ctrl_toggle_enable_updates_runtime_state( fd_wksp_t * wksp ) {
   FD_TEST( test_bam_admin_rpc_mock.request_cnt == 2UL );
   FD_TEST( strstr( test_bam_admin_rpc_mock.requests[1], "\"method\":\"setContactInfoClientId\"" ) );
   FD_TEST( strstr( test_bam_admin_rpc_mock.requests[1], "[2]" ) );
-  FD_TEST( !strcmp( ctrl.url, "http://testnet.bam.jito.wtf:80" ) );
+  FD_TEST( !strcmp( ctrl.url, "http://testnet.bam.jito.wtf:50055" ) );
 
   ctrl.command = FD_BAM_CTRL_CMD_ENABLE;
   ctrl.enable  = 1U;
@@ -4188,9 +4188,9 @@ test_bam_ctrl_toggle_enable_updates_runtime_state( fd_wksp_t * wksp ) {
   FD_TEST( ctrl.enable == 1U );
   FD_TEST( ctx->enabled == 1U );
   FD_TEST( fd_fseq_query( fseq ) == 0UL );
-  FD_TEST( !strcmp( ctrl.url, "http://testnet.bam.jito.wtf:80" ) );
+  FD_TEST( !strcmp( ctrl.url, "http://testnet.bam.jito.wtf:50055" ) );
   FD_TEST( !strcmp( ctx->server_fqdn, "testnet.bam.jito.wtf" ) );
-  FD_TEST( ctx->server_tcp_port == 80U );
+  FD_TEST( ctx->server_tcp_port == 50055U );
 
   test_bam_admin_rpc_expect_fseq_zero = NULL;
   FD_TEST( fd_fseq_leave( fseq ) == fseq_shmem );
@@ -4229,7 +4229,7 @@ test_bam_ctrl_enable_from_disabled_start( fd_wksp_t * wksp ) {
   FD_TEST( ctrl.state == FD_BAM_CTRL_STATE_SUCCESS );
   FD_TEST( ctrl.enable == 1U );
   FD_TEST( ctx->enabled == 1 );
-  FD_TEST( !strcmp( ctrl.url, "http://testnet.bam.jito.wtf:80" ) );
+  FD_TEST( !strcmp( ctrl.url, "http://testnet.bam.jito.wtf:50055" ) );
   FD_TEST( !strcmp( ctx->ctrl->error, "" ) );
 
   ctx->keyswitch = NULL;
@@ -4276,7 +4276,7 @@ test_bam_ctrl_enable_from_dormant_then_set_url( fd_wksp_t * wksp ) {
   FD_TEST( ctx->tcp_sock < 0 );
 
   ctrl.command = FD_BAM_CTRL_CMD_URL;
-  strlcpy( ctrl.url, "http://bam.example.com:8899", FD_URL_MAX );
+  fd_cstr_ncpy( ctrl.url, "http://bam.example.com:8899", sizeof( ctrl.url ) );
   ctrl.state   = FD_BAM_CTRL_STATE_REQUEST;
 
   fd_bam_tile_housekeeping( ctx );
@@ -4325,7 +4325,7 @@ test_bam_ctrl_invalid_url_sets_error_and_preserves_config( fd_wksp_t * wksp ) {
 
   FD_TEST( ctrl.state == FD_BAM_CTRL_STATE_ERROR );
   FD_TEST( strstr( ctrl.error, "Invalid BAM URL" ) != NULL );
-  FD_TEST( !strcmp( ctrl.url, "http://testnet.bam.jito.wtf:80" ) );
+  FD_TEST( !strcmp( ctrl.url, "http://testnet.bam.jito.wtf:50055" ) );
   FD_TEST( !strcmp( ctx->server_fqdn, "testnet.bam.jito.wtf" ) );
   FD_TEST( ctx->enabled == 1 );
 

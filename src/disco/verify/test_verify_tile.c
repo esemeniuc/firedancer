@@ -143,7 +143,7 @@ test_bam_atomic_verify_failure_result_owner( void ) {
   ulong            depths[ 2 ]       = { 16UL, 16UL };
   ulong            cr_avail[ 2 ]     = { ULONG_MAX, ULONG_MAX };
   ulong            min_cr_avail      = ULONG_MAX;
-  _Bool            out_reliable[ 2 ] = { 0, 0 };
+  int              out_reliable[ 2 ] = { 0, 0 };
   fd_stem_context_t stem = {
     .mcaches             = mcaches,
     .seqs                = seqs,

@@ -40,7 +40,7 @@ static struct {
 
   ulong seqs    [ BAM_FUZZ_OUT_MAX ]; /* Current publish seq per out (monotonic) */
   ulong cr_avail[ BAM_FUZZ_OUT_MAX ]; /* Credit counters; seeded to ULONG_MAX */
-  _Bool out_reliable[ BAM_FUZZ_OUT_MAX ]; /* Fuzzer outputs use reliable stem accounting */
+  int out_reliable[ BAM_FUZZ_OUT_MAX ]; /* Fuzzer outputs use reliable stem accounting */
   ulong min_cr_avail;                 /* Min credit observed (tracks exhaustion) */
 
   fd_stem_context_t stem; /* Stem wiring for fd_stem_publish */

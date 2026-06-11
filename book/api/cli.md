@@ -216,14 +216,14 @@ Arguments:
 |--------------------------|------------------------------------------------------------|
 | `--config <path>`        | Path to the configuration TOML used to start the validator |
 | `--enable` / `--disable` | Turn BAM on or off                                         |
-| `--url <url>`            | BAM gRPC endpoint, eg. `http://testnet.bam.jito.wtf:80`    |
+| `--url <url>`            | BAM gRPC endpoint, eg. `http://testnet.bam.jito.wtf:50055` |
 | `--sni <domain>`         | Optional SNI override for TLS endpoints                    |
 
 Example: enable BAM and point to a testnet node while the validator is
 running:
 
 ```bash
-$ fddev set-bam --enable --url http://testnet.bam.jito.wtf:80 --config ./src/app/fdctl/config/testnet-bam.toml
+$ fddev set-bam --enable --url http://testnet.bam.jito.wtf:50055 --config ./src/app/fdctl/config/testnet-bam.toml
 ```
 
 Currently due to implementation limitations, the key can be partially

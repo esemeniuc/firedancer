@@ -111,7 +111,6 @@ before_credit( fd_quic_ctx_t *     ctx,
   /* Publishes to mcache via callbacks */
   long now = fd_clock_tile_now( ctx->clock );
   ctx->now = now;
-
   *charge_busy = fd_quic_service( ctx->quic, now );
 }
 
