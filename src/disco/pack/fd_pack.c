@@ -1450,8 +1450,9 @@ fd_pack_insert_bundle_fini( fd_pack_t          * pack,
        bundles are coming in a pre-prioritized order, so it doesn't make
        sense to drop an earlier bundle for this one.  That means that
        really, the best thing to do is drop this one. */
-  int is_bam_bundle = txn_cnt && bundle[0]->txnp->source_tpu==FD_TXN_M_TPU_SOURCE_BAM;
-  if( FD_UNLIKELY( (!initializer_bundle)&(!is_bam_bundle)&(pending_b_txn_cnt+txn_cnt>pack->pack_depth/2UL) ) ) err = FD_PACK_INSERT_REJECT_PRIORITY;
+  if( FD_UNLIKELY( !initializer_bundle &&
+                   ( !txn_cnt || bundle[ 0 ]->txnp->source_tpu!=FD_TXN_M_TPU_SOURCE_BAM ) &&
+                   pending_b_txn_cnt+txn_cnt>pack->pack_depth/2UL ) ) err = FD_PACK_INSERT_REJECT_PRIORITY;
 
   if( FD_UNLIKELY( expires_at<pack->expire_before                                         ) ) err = FD_PACK_INSERT_REJECT_EXPIRED;
 
@@ -2519,8 +2520,9 @@ fd_pack_try_schedule_bundle( fd_pack_t  * pack,
     out_txnp->source_ipv4                     = cur->txn->source_ipv4;
     out_txnp->flags                           = cur->txn->flags;
     out_txnp->bam                             = cur->txn->bam;
-    _Bool bam_independent = out_txnp->source_tpu==FD_TXN_M_TPU_SOURCE_BAM && !out_txnp->bam.revert_on_error;
-    if( FD_UNLIKELY( txn_cnt==1UL && bam_independent ) ) {
+    if( FD_UNLIKELY( txn_cnt==1UL &&
+                     out_txnp->source_tpu==FD_TXN_M_TPU_SOURCE_BAM &&
+                     !out_txnp->bam.revert_on_error ) ) {
       out_txnp->flags &= ~FD_TXN_P_FLAGS_BUNDLE;
     }
     /* Copy the ALT accounts from the source fd_txn_e_t */
@@ -2623,8 +2625,6 @@ fd_pack_schedule_next_microblock( fd_pack_t *  pack,
   ulong alloc_limit = pack->lim->max_allocated_data_per_block - pack->alloc_consumed;
 
   sched_return_t status = {0}, status1 = {0};
-  _Bool bam_only = !!( schedule_flags & FD_PACK_SCHEDULE_BAM_ONLY );
-  if( FD_UNLIKELY( bam_only ) ) schedule_flags &= FD_PACK_SCHEDULE_VOTE | FD_PACK_SCHEDULE_BUNDLE;
 
   if( FD_LIKELY( schedule_flags & FD_PACK_SCHEDULE_VOTE ) ) {
     /* Schedule vote transactions */
@@ -2647,7 +2647,7 @@ fd_pack_schedule_next_microblock( fd_pack_t *  pack,
   /* Bundle can't mix with votes, so only try to schedule a bundle if we
      didn't get any votes. */
   if( FD_UNLIKELY( !!(schedule_flags & FD_PACK_SCHEDULE_BUNDLE) & (status1.txns_scheduled==0UL) ) ) {
-    int bundle_result = fd_pack_try_schedule_bundle( pack, bank_tile, bam_only, out );
+    int bundle_result = fd_pack_try_schedule_bundle( pack, bank_tile, !!( schedule_flags & FD_PACK_SCHEDULE_BAM_ONLY ), out );
     if( FD_UNLIKELY( bundle_result>0                         ) ) return (ulong)bundle_result;
     if( FD_UNLIKELY( bundle_result==TRY_BUNDLE_HAS_CONFLICTS ) ) return 0UL;
     /* in the NO_READY_BUNDLES or DOES_NOT_FIT case, we schedule like
@@ -2659,7 +2659,7 @@ fd_pack_schedule_next_microblock( fd_pack_t *  pack,
 
 
   /* Fill any remaining space with non-vote transactions */
-  if( FD_LIKELY( schedule_flags & FD_PACK_SCHEDULE_TXN ) ) {
+  if( FD_LIKELY( (schedule_flags & FD_PACK_SCHEDULE_TXN) && !(schedule_flags & FD_PACK_SCHEDULE_BAM_ONLY) ) ) {
     status = fd_pack_schedule_impl( pack, pack->pending,       cu_limit, txn_limit,          byte_limit, alloc_limit, bank_tile,
         pack->pending_smallest,       use_by_bank_txn, out+scheduled );
 

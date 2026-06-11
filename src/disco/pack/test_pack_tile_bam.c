@@ -271,7 +271,7 @@ test_pack_tile_mark_bam_work_scheduled( test_pack_tile_harness_t * h,
   pack_bam_work_t * item = &h->ctx->bam_work[ work_idx ];
   FD_TEST( item->state==PACK_BAM_WORK_STATE_PENDING );
 
-  pack_tile_note_bam_work_stage( h->ctx, FD_METRICS_ENUM_PACK_BAM_WORK_STAGE_V_SCHEDULED_IDX, 1UL );
+  h->ctx->bam_work_item_stage_cnt[ FD_METRICS_ENUM_PACK_BAM_WORK_STAGE_V_SCHEDULED_IDX ]++;
   item->state             = PACK_BAM_WORK_STATE_SCHEDULED;
   item->remaining_txn_cnt = item->txn_cnt;
   h->ctx->bam_pending_work_cnt--;

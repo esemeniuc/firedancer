@@ -49,6 +49,9 @@ static struct {
   fd_bam_fee_cfg_t  fee_cfg; /* Shared fee cfg buffer */
   fd_histf_t        builder_heartbeat_arrival_delta[1]; /* Histogram backing for the BuilderHeartBeat arrival-delta metric */
 
+  void * pending_txn_mem;
+  ulong  pending_txn_max;
+
   /* Backing storage for fd_grpc_client */
   void * grpc_client_mem;
   ulong  grpc_buf_max;
@@ -196,6 +199,13 @@ bam_fuzz_env_init( int *    pargc,
   /* Build two outputs: verify (0) and gossip (1) */
   bam_fuzz_setup_out( BAM_FUZZ_OUT_VERIFY, 128UL, FD_TPU_PARSED_MTU);
   bam_fuzz_setup_out( BAM_FUZZ_OUT_GOSSIP, 64UL, sizeof(fd_bam_contact_update_t) );
+
+  bam_fuzz_ctx.pending_txn_max = bam_fuzz_ctx.depths[ BAM_FUZZ_OUT_VERIFY ];
+  bam_fuzz_ctx.pending_txn_mem = fd_wksp_alloc_laddr( g_wksp,
+                                                       bam_pending_txn_align(),
+                                                       bam_pending_txn_footprint( bam_fuzz_ctx.pending_txn_max ),
+                                                       1UL );
+  FD_TEST( bam_fuzz_ctx.pending_txn_mem );
 
   bam_fuzz_ctx.out_verify = (fd_bam_out_ctx_t) {
       .idx    = BAM_FUZZ_OUT_VERIFY,
@@ -490,6 +500,9 @@ bam_fuzz_reset_tile( void ) {
   ctx->stem       = &bam_fuzz_ctx.stem;
   ctx->verify_out = bam_fuzz_ctx.out_verify;
   ctx->gossip_out = bam_fuzz_ctx.out_gossip;
+  ctx->pending_txns = bam_pending_txn_join( bam_pending_txn_new( bam_fuzz_ctx.pending_txn_mem,
+                                                                 bam_fuzz_ctx.pending_txn_max ) );
+  FD_TEST( ctx->pending_txns );
 
   bam_fuzz_ctx.seqs[ BAM_FUZZ_OUT_VERIFY ] = 0UL;
   bam_fuzz_ctx.seqs[ BAM_FUZZ_OUT_GOSSIP ] = 0UL;

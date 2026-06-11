@@ -35,12 +35,6 @@ min_download_speed_mibs = 195
 file_size_gib = 600
 max_accounts = 1_600_000_000
 
-[log]
-level_logfile = "NOTICE"
-
-[development]
-    core_dump = true
-
 [tiles.rpc]
 enabled = true
 rpc_listen_address = "127.0.0.1"
