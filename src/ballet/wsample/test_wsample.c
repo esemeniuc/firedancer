@@ -315,6 +315,7 @@ test_remove_idx( void ) {
   FD_TEST( sample );
 
   fd_wsample_remove_idx( sample, 0UL );
+  FD_TEST( fd_wsample_sample( sample ) == 1UL );
   FD_TEST( fd_wsample_restore_all( sample ) );
 
   fd_wsample_remove_idx( sample, 1UL );
@@ -341,7 +342,44 @@ test_remove_idx( void ) {
 
 /* FIXME: Probably go back to making this function a static inline and
    delete this test. */
-uint fd_wsample_map_sample( fd_wsample_t * tree, ulong         query );
+ulong fd_wsample_map_sample( fd_wsample_t * tree, ulong query );
+
+static void
+test_map_boundaries( void ) {
+  fd_chacha_rng_t _rng[1];
+  fd_chacha_rng_t * rng = fd_chacha_rng_join( fd_chacha_rng_new( _rng, FD_CHACHA_RNG_MODE_SHIFT ) );
+  ulong sizes[] = { 9UL, 81UL, 729UL, 1018UL };
+
+  for( ulong k=0UL; k<sizeof(sizes)/sizeof(sizes[0]); k++ ) for( int large=0; large<2; large++ ) {
+    ulong sz = sizes[k];
+    ulong total = large ? ULONG_MAX : sz*(sz+1UL)/2UL;
+    ulong first_weight = large ? ULONG_MAX/sz : 1UL;
+    ulong last_weight  = large ? ULONG_MAX/sz + ULONG_MAX%sz : sz;
+    void * partial = fd_wsample_new_init( _shmem, rng, sz, 1, FD_WSAMPLE_HINT_FLAT );
+    for( ulong i=0UL; i<sz; i++ ) {
+      ulong weight = large ? ULONG_MAX/sz + (i==sz-1UL ? ULONG_MAX%sz : 0UL) : i+1UL;
+      partial = fd_wsample_new_add( partial, weight );
+    }
+    fd_wsample_t * tree = fd_wsample_join( fd_wsample_new_fini( partial, 0UL ) );
+    FD_TEST( tree );
+
+    /* Exact powers of the radix exercise both conceptual sentinels at
+       every level; 1018 also covers a partially filled four-level tree.
+       The large-weight pass exercises cumulative sums above LONG_MAX. */
+    FD_TEST( fd_wsample_map_sample( tree, 0UL       )==0UL    );
+    FD_TEST( fd_wsample_map_sample( tree, total-1UL )==sz-1UL );
+    fd_wsample_remove_idx( tree, 0UL );
+    FD_TEST( fd_wsample_map_sample( tree, 0UL )==1UL );
+    fd_wsample_remove_idx( tree, sz-1UL );
+    FD_TEST( fd_wsample_map_sample( tree, total-first_weight-last_weight-1UL )==sz-2UL );
+    FD_TEST( fd_wsample_restore_all( tree )==tree );
+    FD_TEST( fd_wsample_map_sample( tree, 0UL       )==0UL    );
+    FD_TEST( fd_wsample_map_sample( tree, total-1UL )==sz-1UL );
+
+    fd_wsample_delete( fd_wsample_leave( tree ) );
+  }
+  fd_chacha_rng_delete( fd_chacha_rng_leave( rng ) );
+}
 
 static inline void
 test_map( void ) {
@@ -350,7 +388,10 @@ test_map( void ) {
 
   ulong sz=1018UL;
   void * partial = fd_wsample_new_init( _shmem, rng, sz, 0, FD_WSAMPLE_HINT_POWERLAW_NOREMOVE );
-  for( ulong i=0UL; i<sz; i++ ) partial = fd_wsample_new_add( partial, 2000000UL / (i+1UL) );
+  for( ulong i=0UL; i<sz; i++ ) {
+    weights[i] = 2000000UL / (i+1UL);
+    partial = fd_wsample_new_add( partial, weights[i] );
+  }
   fd_wsample_t * tree = fd_wsample_join( fd_wsample_new_fini( partial, 0UL ) );
 
   ulong x = 0UL;
@@ -467,6 +508,7 @@ main( int     argc,
   FD_TEST( fd_wsample_footprint( MAX,      1 )<MAX_FOOTPRINT  );
 
   test_matches_solana();
+  test_map_boundaries();
   test_map();
   test_sharing();
   test_restore_disabled();

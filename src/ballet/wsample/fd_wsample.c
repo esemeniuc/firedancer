@@ -5,6 +5,7 @@
 #endif
 
 #define R 9
+FD_STATIC_ASSERT( R>1 && !((R-1)&(R-2)), radix_is_one_more_than_a_power_of_two );
 /* This sampling problem is an interesting one from a performance
    perspective.  There are lots of interesting approaches.  The
    header/implementation split is designed to give lots of flexibility
@@ -407,23 +408,39 @@ fd_wsample_restore_all( fd_wsample_t * sampler ) {
   return sampler;
 }
 
-#define fd_ulong_if_force( c, t, f ) (__extension__({ \
-      ulong result;                                   \
-      __asm__( "testl  %1, %1; \n\t"                  \
-               "movq   %3, %0; \n\t"                  \
-               "cmovne %2, %0; \n\t"                  \
-               : "=&r"(result)                        \
-               : "r"(c), "rm"(t), "rmi"(f)            \
-               : "cc" );                              \
-      result;                                         \
-      }))
+/* Select without allowing the compiler to turn a valid load into a
+   conditional branch.  The input values have already been loaded in bounds. */
+FD_FN_CONST static inline ulong
+fd_wsample_select_eq( ulong x, ulong y, ulong t, ulong f ) {
+#if FD_HAS_X86
+  __asm__( "cmpq %2, %1; cmoveq %3, %0" : "+r"(f) : "r"(x), "ir"(y), "r"(t) : "cc" );
+  return f;
+#else
+  ulong mask = 0UL-(ulong)(x==y);
+  FD_COMPILER_FORGET( mask );
+  return (t & mask) | (f & ~mask);
+#endif
+}
+
+FD_FN_PURE static inline ulong
+fd_wsample_child_idx( tree_ele_t const * e, ulong query ) {
+#if FD_HAS_AVX512 && R==9
+  __mmask8 mask = _mm512_cmple_epu64_mask( wwv_ld( e->left_sum ), wwv_bcast( query ) );
+  return (ulong)fd_uchar_popcnt( mask );
+#else
+  ulong child_idx = 0UL;
+  for( ulong i=0UL; i<R-1UL; i++ ) child_idx += (ulong)(e->left_sum[i]<=query);
+  return child_idx;
+#endif
+}
 
 /* Helper methods for sampling functions */
 typedef struct { ulong idx; ulong weight; } idxw_pair_t; /* idx in [0, total_cnt) */
 
 /* Assumes query in [0, unremoved_weight), which implies
-   unremoved_weight>0, so the tree can't be empty. */
-static inline idxw_pair_t
+   unremoved_weight>0, so the tree can't be empty.  This variant also
+   returns the sampled weight for removal. */
+__attribute__((always_inline)) static inline idxw_pair_t
 fd_wsample_map_sample_i( fd_wsample_t const * sampler,
                          ulong                query ) {
   tree_ele_t const * tree = sampler->tree;
@@ -432,25 +449,15 @@ fd_wsample_map_sample_i( fd_wsample_t const * sampler,
   ulong S      = sampler->unremoved_weight;
   for( ulong h=0UL; h<sampler->height; h++ ) {
     tree_ele_t const * e = tree+cursor;
-    ulong x = query;
-    ulong child_idx = 0UL;
+    ulong child_idx = fd_wsample_child_idx( e, query );
 
-#if FD_HAS_AVX512 && R==9
-    __mmask8 mask = _mm512_cmple_epu64_mask( wwv_ld( e->left_sum ), wwv_bcast( x ) );
-    child_idx = (ulong)fd_uchar_popcnt( mask );
-#else
-    for( ulong i=0UL; i<R-1UL; i++ ) child_idx += (ulong)(e->left_sum[ i ]<=x);
-#endif
-
-    /* See the note at the top of this file for the explanation of l[i]
-       and l[i-1].  fd_ulong_if evaluates both candidates, so clamp the
-       physical loads to left_sum before the muxes select the conceptual
-       sentinel values. */
-    ulong li  = fd_ulong_if( child_idx<R-1UL, e->left_sum[ fd_ulong_min( child_idx, R-2UL ) ], S   );
-    ulong lm1 = fd_ulong_if( child_idx>0UL,   e->left_sum[ child_idx-(ulong)!!child_idx     ], 0UL );
+    /* R-1 is a power of two.  Wrap the conceptual sentinel indices
+       inside left_sum before selecting zero or the subtree total. */
+    ulong lm1 = fd_wsample_select_eq( child_idx, 0UL, 0UL, e->left_sum[ (child_idx-1UL)&(R-2UL) ] );
+    ulong li = fd_wsample_select_eq( child_idx, R-1UL, S, e->left_sum[ child_idx&(R-2UL) ] );
+    S = li - lm1;
 
     query -= lm1;
-    S = li - lm1;
     cursor = R*cursor + child_idx + 1UL;
   }
   idxw_pair_t to_return = { .idx = cursor - sampler->internal_node_cnt, .weight = S };
@@ -460,7 +467,18 @@ fd_wsample_map_sample_i( fd_wsample_t const * sampler,
 ulong
 fd_wsample_map_sample( fd_wsample_t * sampler,
                        ulong          query ) {
-  return fd_wsample_map_sample_i( sampler, query ).idx;
+  ulong height = sampler->height;
+  if( FD_UNLIKELY( height<=1UL ) ) return height ? fd_wsample_child_idx( sampler->tree, query ) : 0UL;
+  ulong cursor = 0UL;
+  while( --height ) {
+    tree_ele_t const * e = sampler->tree+cursor;
+    ulong child_idx = fd_wsample_child_idx( e, query );
+    query -= fd_wsample_select_eq( child_idx, 0UL, 0UL, e->left_sum[ (child_idx-1UL)&(R-2UL) ] );
+    cursor = R*cursor + child_idx + 1UL;
+  }
+  /* The final level only needs the child index, not its predecessor or
+     weight.  Keeping it separate also avoids extra work for height one. */
+  return R*cursor + fd_wsample_child_idx( sampler->tree+cursor, query ) + 1UL - sampler->internal_node_cnt;
 }
 
 
@@ -520,10 +538,9 @@ fd_wsample_find_weight( fd_wsample_t const * sampler,
 
     /* If child_idx < R-1, we can compute the weight easily.  If
        child_idx==R-1, the computation is S - left_sum[ R-2 ], but we
-       don't know S, so we need to continue up the tree.  fd_ulong_if
-       evaluates both candidates, so keep the predecessor load in bounds
-       even when child_idx is zero. */
-    lm1  += fd_ulong_if( child_idx>0UL, tree[ parent ].left_sum[ child_idx-(ulong)!!child_idx ], 0UL );
+       don't know S, so we need to continue up the tree.  Only form the
+       predecessor address when it exists. */
+    if( child_idx ) lm1 += tree[ parent ].left_sum[ child_idx-1UL ];
     if( FD_LIKELY( child_idx<R-1UL ) ) {
       li = tree[ parent ].left_sum[ child_idx ];
       break;
@@ -695,6 +712,45 @@ fd_wsample_remove_idx( fd_wsample_t * sampler,
 #define FD_WSAMPLE_IMPLEMENTATION 0
 #endif
 
+#if FD_WSAMPLE_IMPLEMENTATION > 0
+/* The same traversal used for height four also avoids a second walk back
+   up the tree for heights 1, 2, 3 and 5. */
+__attribute__((always_inline)) static inline ulong
+fd_wsample_sample_and_remove_other( fd_wsample_t * sampler, ulong unif ) {
+  tree_ele_t * tree = sampler->tree;
+  switch( sampler->height ) {
+  case 1U: {
+    PREPARE();
+    TRAVERSE_LEVEL(0);
+    PROPAGATE_LEVEL(0);
+    FINALIZE();
+    return cursor - sampler->internal_node_cnt;
+  }
+  case 2U: {
+    PREPARE();
+    TRAVERSE_LEVEL(0); TRAVERSE_LEVEL(1);
+    PROPAGATE_LEVEL(0); PROPAGATE_LEVEL(1);
+    FINALIZE();
+    return cursor - sampler->internal_node_cnt;
+  }
+  case 3U: {
+    PREPARE();
+    TRAVERSE_LEVEL(0); TRAVERSE_LEVEL(1); TRAVERSE_LEVEL(2);
+    PROPAGATE_LEVEL(0); PROPAGATE_LEVEL(1); PROPAGATE_LEVEL(2);
+    FINALIZE();
+    return cursor - sampler->internal_node_cnt;
+  }
+  default: {
+    PREPARE();
+    TRAVERSE_LEVEL(0); TRAVERSE_LEVEL(1); TRAVERSE_LEVEL(2); TRAVERSE_LEVEL(3); TRAVERSE_LEVEL(4);
+    PROPAGATE_LEVEL(0); PROPAGATE_LEVEL(1); PROPAGATE_LEVEL(2); PROPAGATE_LEVEL(3); PROPAGATE_LEVEL(4);
+    FINALIZE();
+    return cursor - sampler->internal_node_cnt;
+  }
+  }
+}
+#endif
+
 /* For now, implement the _many functions as loops over the single
    sample functions.  It is possible to do better though. */
 
@@ -740,6 +796,10 @@ fd_wsample_sample_and_remove_many( fd_wsample_t * sampler,
     idxs[ i ] = cursor - sampler->internal_node_cnt;
     continue;
   }
+    if( sampler->height>0U && sampler->height<=5U ) {
+      idxs[ i ] = fd_wsample_sample_and_remove_other( sampler, unif );
+      continue;
+    }
 #endif
     idxw_pair_t p = fd_wsample_map_sample_i( sampler, unif );
     fd_wsample_remove( sampler, p );
@@ -784,6 +844,7 @@ fd_wsample_sample_and_remove( fd_wsample_t * sampler ) {
     FINALIZE();
     return cursor - sampler->internal_node_cnt;
   }
+  if( sampler->height>0U && sampler->height<=5U ) return fd_wsample_sample_and_remove_other( sampler, unif );
 #endif
   idxw_pair_t p = fd_wsample_map_sample_i( sampler, unif );
   fd_wsample_remove( sampler, p );
