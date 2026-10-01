@@ -657,6 +657,13 @@ set_identity( fd_admin_tile_ctx_t * ctx,
     return;
   }
 
+  if( FD_UNLIKELY( ctx->alpenglow ) ) {
+    FD_LOG_WARNING(( "set-identity is not supported with Alpenglow" ));
+    report_admin_command( &event, FD_EVENT_ADMIN_COMMAND_RESULT_UNSUPPORTED );
+    fd_adminctl_complete( adminctl, slot_idx, FD_ADMINCTL_RESULT_UNSUPPORTED );
+    return;
+  }
+
   ulong state           = FD_SET_IDENTITY_STATE_UNLOCKED;
   ulong identity_outset = (ulong)fd_log_wallclock();
   for(;;) {
